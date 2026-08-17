@@ -1,6 +1,7 @@
 # NOTICE
 
-本插件（jp-furigana）分发时打包了以下第三方组件。
+LICENSE 里的 MIT 只覆盖本插件自身的代码（main.js / furigana.js / manifest.json / tools/）。
+本插件分发时还打包了以下第三方组件，它们各自的许可另算，重新分发时必须保留这些声明。
 
 ## kuromoji.js
 
