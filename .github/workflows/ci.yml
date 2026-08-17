@@ -27,6 +27,23 @@ jobs:
       - name: manifest.json 合法性
         run: node -e "const m=require('./src/manifest.json'); if(m.manifest_version!==1) throw new Error('manifest_version 不是 1'); console.log('v'+m.version, m.slug)"
 
+      # BetterNCM 商店按 subpath=/src 直接分发 src/，这些是上架准则要求的
+      - name: 上架准则检查
+        run: |
+          node -e "
+          const fs=require('fs');
+          const m=JSON.parse(fs.readFileSync('src/manifest.json','utf8'));
+          for (const k of ['name','slug','version','author','description','preview','betterncm_version']) {
+            if (!m[k]) throw new Error('manifest 缺 '+k);
+          }
+          if (!fs.existsSync('src/'+m.preview)) throw new Error('预览图不存在: '+m.preview);
+          const kb = fs.statSync('src/'+m.preview).size/1024;
+          if (kb > 200) throw new Error('预览图 '+kb.toFixed(0)+' KB, 准则要求压缩');
+          const s = fs.readFileSync('src/main.js','utf8');
+          if (!s.includes('betterncm.ncm.openUrl')) throw new Error('设置页缺少用 openUrl 打开的仓库/反馈链接');
+          console.log('预览图 '+kb.toFixed(0)+' KB, 元信息与外链检查通过');
+          "
+
       - name: 注音逻辑 (词典)
         run: node tools/test-furigana.js
 
