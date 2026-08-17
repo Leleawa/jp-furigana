@@ -1,0 +1,20 @@
+# 本地开发笔记，不发布
+DEV-NOTES.md
+
+# 打包产物：15 MB 一个，不进 git 历史，release 手动上传
+builds/*
+!builds/.gitkeep
+
+# 测试用的真实接口响应，含整首歌词和投稿者信息，不进公开仓库
+# test-api-romaji.js 在文件缺失时会自动跳过
+tools/fixtures/
+
+# npm pack kuromoji 留下的临时文件（见 DEV-NOTES 的「重新生成 kuromoji.js」）
+kuromoji-*.tgz
+package/
+node_modules/
+
+# 系统垃圾
+Thumbs.db
+desktop.ini
+.DS_Store

@@ -1,0 +1,7 @@
+# 统一行尾，避免换机器 clone 时整文件都是 diff
+* text=auto eol=lf
+
+# 二进制，别做行尾转换也别当文本 diff
+*.dat.gz binary
+*.png binary
+*.plugin binary

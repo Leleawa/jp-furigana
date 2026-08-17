@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# 只做检查，不产出任何东西 —— release 手动发
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 语法检查
+        run: |
+          for f in src/main.js src/furigana.js src/kuromoji.js tools/*.js; do
+            echo "checking $f"
+            node --check "$f"
+          done
+
+      - name: manifest.json 合法性
+        run: node -e "const m=require('./src/manifest.json'); if(m.manifest_version!==1) throw new Error('manifest_version 不是 1'); console.log('v'+m.version, m.slug)"
+
+      - name: 注音逻辑 (词典)
+        run: node tools/test-furigana.js
+
+      - name: 注音逻辑 (官方音译对齐 + 2.x nbsp)
+        run: node tools/test-romaji.js
+
+      # fixture 含整首歌词没有入库，这一步在 CI 上会自动 SKIP
+      - name: 接口链路 (缺 fixture 则跳过)
+        run: node tools/test-api-romaji.js
+
+      - name: 打包冒烟
+        run: node tools/pack.js
+
+      - name: 校验产物
+        run: |
+          test -f builds/jp-furigana.plugin
+          unzip -t builds/jp-furigana.plugin
+          # manifest.json 必须在 zip 根层，否则 BetterNCM 认不出来
+          unzip -l builds/jp-furigana.plugin | grep -qE ' manifest\.json$'
+          # 条目名不能有反斜杠（用字符类而不是 '\\'，后者会让 grep 报 Trailing backslash）
+          if unzip -l builds/jp-furigana.plugin | grep -q '[\]'; then
+            echo "条目名里有反斜杠"; exit 1
+          fi
+          echo "产物校验通过"
