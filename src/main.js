@@ -12,6 +12,7 @@
 	'use strict';
 
 	const LOG = '[jp-furigana]';
+	const REPO_URL = 'https://github.com/Leleawa/jp-furigana';
 	const CONFIG_KEY = 'jp-furigana.config';
 	// 注音算法改了就换 key，让旧缓存自然失效
 	const CACHE_KEY = 'jp-furigana.cache.v2';
@@ -1004,6 +1005,9 @@
 				#jp-furigana-config h3 { font-size: 16px; font-weight: bold; margin: 12px 0 4px; }
 				#jp-furigana-config .fg-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 				#jp-furigana-config .fg-hint { opacity: .6; font-size: 12px; }
+				#jp-furigana-config .fg-links { display: flex; gap: 16px; margin-bottom: 4px; }
+				#jp-furigana-config .fg-links a { text-decoration: underline; cursor: pointer; opacity: .85; }
+				#jp-furigana-config .fg-links a:hover { opacity: 1; }
 				#jp-furigana-config input[type="text"] { width: 320px; }
 				#jp-furigana-config .fg-preview {
 					font-size: 26px; padding: 14px 16px; margin: 8px 0;
@@ -1011,6 +1015,11 @@
 				}
 				#jp-furigana-config .fg-status { white-space: pre-wrap; font-family: monospace; font-size: 12px; opacity: .8; }
 			</style>
+			<div class="fg-links">
+				<a href="#" data-open="${REPO_URL}">源码仓库</a>
+				<a href="#" data-open="${REPO_URL}/issues">反馈问题</a>
+			</div>
+
 			<h3>预览</h3>
 			<div class="fg-preview"></div>
 
@@ -1126,6 +1135,19 @@
 
 			const out = root.querySelector(`[data-v="${key}"]`);
 			if (out) out.textContent = fmt(key);
+		});
+
+		// 外链要走 betterncm.ncm.openUrl 交给系统浏览器，直接跳会把网易云本身导航走
+		root.querySelectorAll('[data-open]').forEach((el) => {
+			el.onclick = (e) => {
+				e.preventDefault();
+				const url = el.dataset.open;
+				try {
+					betterncm.ncm.openUrl(url);
+				} catch (err) {
+					console.warn(LOG, '打开链接失败', url, err);
+				}
+			};
 		});
 
 		// 这些按钮只在开发模式下存在

@@ -23,10 +23,21 @@ const SRC = path.join(ROOT, 'src');
 const OUT_DIR = path.join(ROOT, 'builds');
 const OUT = path.join(OUT_DIR, 'jp-furigana.plugin');
 
-// 解包后必须直接躺在插件目录根下（manifest.json 在最外层）
-const SRC_FILES = ['manifest.json', 'main.js', 'furigana.js', 'kuromoji.js'];
+// 全部取自 src/，和 BetterNCM 商店的取法一致（商店按 subpath=/src 直接打包这个目录），
+// 这样我们发的 .plugin 和商店分发的内容完全一样，不会有两套。
+// 解包后这些必须直接躺在插件目录根下（manifest.json 在最外层）。
+const SRC_FILES = [
+	'manifest.json',
+	'main.js',
+	'furigana.js',
+	'kuromoji.js',
+	'preview.jpg',
+	// kuromoji 和 IPADIC 的许可要求随附声明，所以这三个也得进包
+	'LICENSE',
+	'NOTICE.md',
+	'LICENSE-kuromoji.txt',
+];
 const SRC_DIRS = ['dict'];
-const ROOT_FILES = ['README.md', 'LICENSE', 'NOTICE.md', 'LICENSE-kuromoji.txt'];
 
 // ---------------------------------------------------------------- zip 写入
 
@@ -136,7 +147,6 @@ function collect() {
 	};
 
 	for (const f of SRC_FILES) add(path.join(SRC, f), f);
-	for (const f of ROOT_FILES) add(path.join(ROOT, f), f);
 	for (const d of SRC_DIRS) {
 		const base = path.join(SRC, d);
 		if (!fs.existsSync(base)) throw new Error(`缺少 src/${d}`);
@@ -161,6 +171,28 @@ function main() {
 		throw new Error('manifest.json 不在 zip 根层，BetterNCM 会认不出来');
 	const dictCount = entries.filter((e) => e.name.startsWith('dict/')).length;
 	if (dictCount !== 12) throw new Error(`dict/ 下应有 12 个词典文件，实际 ${dictCount} 个`);
+
+	// BetterNCM 商店按 subpath=/src 直接打包整个 src/，所以 src/ 里任何多出来的文件
+	// 都会被分发出去。这里断言 src/ 的内容和打包清单完全一致，防止误提交临时文件。
+	const expected = new Set([...SRC_FILES, ...SRC_DIRS]);
+	const actual = fs.readdirSync(SRC);
+	const extra = actual.filter((f) => !expected.has(f));
+	if (extra.length) throw new Error(`src/ 里有不该分发的文件: ${extra.join(', ')}`);
+	const missing = [...expected].filter((f) => !actual.includes(f));
+	if (missing.length) throw new Error(`src/ 缺少: ${missing.join(', ')}`);
+
+	// 许可文件在根目录和 src/ 各有一份（GitHub 认根目录的，商店只拿 src/ 的），别让它们漂移
+	for (const f of ['LICENSE', 'NOTICE.md', 'LICENSE-kuromoji.txt']) {
+		const a = fs.readFileSync(path.join(ROOT, f));
+		const b = fs.readFileSync(path.join(SRC, f));
+		if (!a.equals(b)) throw new Error(`${f} 在根目录和 src/ 下不一致`);
+	}
+
+	// manifest 里声明的预览图必须真的存在
+	const mf = JSON.parse(fs.readFileSync(path.join(SRC, 'manifest.json'), 'utf8'));
+	if (!mf.preview) throw new Error('manifest.json 缺 preview 字段，商店要求预览图');
+	if (!entries.some((e) => e.name === mf.preview))
+		throw new Error(`manifest 声明的预览图 ${mf.preview} 不在包里`);
 
 	fs.mkdirSync(OUT_DIR, { recursive: true });
 	fs.writeFileSync(OUT, buildZip(entries));
