@@ -111,7 +111,7 @@
 		loading: false,
 		loadError: null,
 		container: null,
-		matchedBy: null, // 'custom' | 'known:<selector>' | 'auto'
+		matchedBy: null, // 'custom' | 'known:<selector>' | 'known:<selector>（都不可见）' | 'auto'
 		applying: false,
 		lineCount: 0,
 		annotated: 0,
@@ -424,6 +424,42 @@
 		return block;
 	}
 
+	/**
+	 * 元素是不是真的看得见。有的第三方歌词插件（refined-now-playing-netease-next）
+	 * 会把网易云原生的播放页整个留在 DOM 里、只用 visibility/opacity 藏起来，
+	 * 不看可见性的话我们会把注音全加在那份看不见的歌词上，屏幕上一个字都不显示。
+	 */
+	let visCache = new Map(); // 每轮 collectLines 清一次，别缓存过夜
+	function isVisible(el) {
+		if (!el || el.nodeType !== 1) return false;
+		let s;
+		try {
+			s = getComputedStyle(el);
+		} catch (e) {
+			return true; // 拿不到就当可见，宁可多注也别漏注
+		}
+		if (!s) return true;
+		// visibility 会继承，看自己这一份就够；display / opacity 不继承，祖先得单独走
+		if (s.visibility === 'hidden' || s.visibility === 'collapse') return false;
+		if (s.display === 'none' || s.opacity === '0') return false;
+		return ancestorsVisible(el.parentElement);
+	}
+
+	function ancestorsVisible(el) {
+		if (!el || el.nodeType !== 1 || el === document.body) return true;
+		if (visCache.has(el)) return visCache.get(el);
+		let ok = true;
+		try {
+			const s = getComputedStyle(el);
+			if (s && (s.display === 'none' || s.opacity === '0')) ok = false;
+		} catch (e) {
+			/* 拿不到就当可见 */
+		}
+		if (ok) ok = ancestorsVisible(el.parentElement);
+		visCache.set(el, ok);
+		return ok;
+	}
+
 	// ------------------------------------------------------------------ 歌词元素定位
 
 	/**
@@ -439,6 +475,7 @@
 			const text = node.nodeValue;
 			if (!text || text.length < 2 || text.length > 120) continue;
 			if (!FuriganaCore.hasKana(text)) continue;
+			if (!isVisible(node.parentElement)) continue; // 藏起来的原生播放页不参与投票
 			let d = 0;
 			for (let p = node.parentElement; p && p !== document.body; p = p.parentElement) {
 				votes.set(p, (votes.get(p) || 0) + 1);
@@ -486,6 +523,7 @@
 
 	/** 返回本次要处理的行元素 */
 	function collectLines() {
+		visCache.clear();
 		if (config.customSelector) {
 			const found = [...document.querySelectorAll(config.customSelector)];
 			if (found.length) {
@@ -494,6 +532,9 @@
 			}
 		}
 
+		// 同时装了别的歌词插件时，页面上可能有好几份歌词 DOM（一份是被藏起来的原生页）。
+		// 所以命中还不够，得至少有两行是真看得见的；一份都看不见时才退回原来的行为。
+		let hidden = null;
 		for (const sel of KNOWN_SELECTORS) {
 			let found;
 			try {
@@ -502,11 +543,20 @@
 				continue;
 			}
 			found = found.filter(hasText);
-			if (found.length >= 2) {
+			if (found.length < 2) continue;
+			let n = 0;
+			for (const el of found) if (isVisible(el) && ++n >= 2) break;
+			if (n >= 2) {
 				state.matchedBy = 'known:' + sel;
 				return dedupeByParent(found);
 			}
+			if (!hidden) hidden = { sel, found };
 		}
+		if (hidden) {
+			state.matchedBy = 'known:' + hidden.sel + '（都不可见）';
+			return dedupeByParent(hidden.found);
+		}
+
 
 		if (!state.container || !state.container.isConnected) state.container = findContainer();
 		if (!state.container) {
