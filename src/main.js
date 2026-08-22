@@ -12,6 +12,8 @@
 	'use strict';
 
 	const LOG = '[jp-furigana]';
+	// 改了实现就换一下，方便确认插件到底有没有被重新加载（JPFurigana.build）
+	const BUILD = 'karaoke-14';
 	const REPO_URL = 'https://github.com/Leleawa/jp-furigana';
 	const CONFIG_KEY = 'jp-furigana.config';
 	// 注音算法改了就换 key，让旧缓存自然失效
@@ -29,7 +31,6 @@
 		onlyFirstLine: true, // 一行里只给原文注音，跳过翻译/罗马音
 		skipCredits: true, // 跳过「作词:／编曲:」这类制作信息行
 		skipNoKanaLines: true, // 跳过一个假名都没有的行（基本都是中文翻译或版权声明）
-		lineHeight: 0, // >0 时给注音行设行高，rt 被裁切时调大
 		requireLyricClass: true, // 自动检测时要求祖先 class 含 "lyric"，避免误伤歌单等界面
 		customSelector: '',
 		verbose: false,
@@ -72,6 +73,9 @@
 		delete cfg.useJapaneseFont;
 		delete cfg.font;
 		delete cfg.romajiFromApi;
+		// 以前用来手动加行高、免得注音被裁切；现在让位的高度是量出来的（见 calibrate），
+		// 这个值只会让有注音的行凭空高一截（有人设成 3.0，21px 的行变成 63px）
+		delete cfg.lineHeight;
 		cfg.configVersion = CONFIG_VERSION;
 		return cfg;
 	}
@@ -92,6 +96,45 @@
 			return false;
 		}
 	})();
+
+	/**
+	 * 这个内核认不认 ruby 排版。旧版网易云的 CEF 不认（CSS.supports('display','ruby')
+	 * 是 false），它把 <rt> 当普通 block 画在底字上面 —— 看着像注音，实际每个带注音的词
+	 * 白占一整个行盒（实测 21px 字号：62px vs 正常 25px），而且外面加多少边距都够不着
+	 * 这块高度。这种情况下只能让注音脱离文档流，自己定位（见 updateStyles 的 fg-no-ruby）。
+	 */
+	let rubySupport = null;
+	function hasRuby() {
+		if (rubySupport !== null) return rubySupport;
+		try {
+			// 排障用：localStorage['jp-furigana.no-ruby'] = '1' 可以强制走降级
+			if (localStorage.getItem('jp-furigana.no-ruby') === '1') return (rubySupport = false);
+		} catch (e) {
+			/* 读不到就算了 */
+		}
+		// 注意：不能用 CSS.supports('display','ruby') —— 不少内核明明有 ruby 排版，
+		// 但 display:ruby 不是合法的作者值，照样返回 false（新版网易云就是）。只能实测：
+		// 有 ruby 排版时注音只占自己那点宽度；没有时 <rt> 会退化成 block，撑满整行宽、
+		// 还要多占一行高。
+		try {
+			if (!document.body) return true; // 还没到能量的时候，先当支持
+			const probe = document.createElement('div');
+			probe.style.cssText =
+				'position:absolute;left:-9999px;top:-9999px;width:300px;' +
+				'font-size:20px;line-height:1.2;visibility:hidden;';
+			probe.innerHTML = '<ruby>漢<rt style="font-size:60%">かんじ</rt></ruby>';
+			document.body.appendChild(probe);
+			const rt = probe.querySelector('rt');
+			const rtWidth = rt ? rt.getBoundingClientRect().width : 0;
+			const height = probe.getBoundingClientRect().height;
+			probe.remove();
+			rubySupport = rtWidth > 0 && rtWidth < 150 && height < 20 * 1.2 * 1.9;
+			log(`ruby 排版检测：注音宽 ${Math.round(rtWidth)}px，整体高 ${Math.round(height)}px → ${rubySupport ? '原生' : '降级'}`);
+			return rubySupport;
+		} catch (e) {
+			return (rubySupport = true);
+		}
+	}
 
 	function saveConfig() {
 		try {
@@ -365,6 +408,11 @@
 
 	// ------------------------------------------------------------------ 文本工具
 
+	/**
+	 * RefinedNowPlaying 的「滑动」逐字动画里，每个词渲染两份文本：本体 +
+	 * 一个绝对定位、用遮罩做高亮的 .rnp-karaoke-word-filler 副本。
+	 * 读文本时必须忽略副本，否则整行会重复一遍，分词和偏移全错。
+	 */
 	/** 我们注上去的读音：有 ruby 排版时是 <rt>，降级时是 <span class="fg-rt"> */
 	function isAnnotation(node) {
 		if (!node || node.nodeType !== 1) return false;
@@ -557,7 +605,6 @@
 			return dedupeByParent(hidden.found);
 		}
 
-
 		if (!state.container || !state.container.isConnected) state.container = findContainer();
 		if (!state.container) {
 			state.matchedBy = null;
@@ -601,18 +648,34 @@
 		host.__fgWrap = null;
 	}
 
-	function buildWrap(segments) {
+	function buildWrap(segments, cls) {
 		const wrap = document.createElement('span');
-		wrap.className = 'fg-line';
+		wrap.className = cls || 'fg-line';
 		for (const seg of segments) {
 			if (seg.rt) {
-				const ruby = document.createElement('ruby');
-				ruby.appendChild(document.createTextNode(seg.text));
-				const rt = document.createElement('rt');
+				// 每个注音单独套一层 inline-block：整行改写时 .fg-line 是 display:inline，
+				// 上下边距对它不起作用，没法把行盒多出来的高度收回去（见 calibrate）
+				const holder = document.createElement('span');
+				holder.className = 'fg-ruby';
+				const rt = document.createElement('span');
 				rt.className = 'fg-rt';
 				rt.textContent = seg.rt;
-				ruby.appendChild(rt);
-				wrap.appendChild(ruby);
+				if (hasRuby()) {
+					// 有 ruby 排版就用真 ruby，断行、避让都交给内核
+					const ruby = document.createElement('ruby');
+					ruby.appendChild(document.createTextNode(seg.text));
+					const realRt = document.createElement('rt');
+					realRt.className = 'fg-rt';
+					realRt.textContent = seg.rt;
+					ruby.appendChild(realRt);
+					holder.appendChild(ruby);
+				} else {
+					// 降级：<rt> 在这种内核里连 position 都不认（实测 position 写了没用），
+					// 所以干脆不用 ruby/rt，底字直接放，注音用普通 span 绝对定位
+					holder.appendChild(document.createTextNode(seg.text));
+					holder.appendChild(rt);
+				}
+				wrap.appendChild(holder);
 			} else {
 				wrap.appendChild(document.createTextNode(seg.text));
 			}
@@ -620,9 +683,9 @@
 		return wrap;
 	}
 
-	function applyWrap(host, segments) {
+	function applyWrap(host, segments, cls) {
 		host.__fgOrig = [...host.childNodes];
-		const wrap = buildWrap(segments);
+		const wrap = buildWrap(segments, cls);
 		host.replaceChildren(wrap);
 		host.__fgWrap = wrap;
 	}
@@ -808,6 +871,9 @@
 			}
 		}
 
+		// 逐字宿主是一个个 inline-block，注音撑不高它们的行盒（见样式里的 .fg-word）
+		const cls = hosts[0] === line ? 'fg-line' : 'fg-line fg-word';
+
 		const mirrors = [];
 		for (const group of groupHosts(hosts, lens, segments)) {
 			const segs = sliceSegments(segments, group.from, group.to);
@@ -815,9 +881,9 @@
 				const host = group.hosts[i];
 				// 整段内容放在组里第一个 span 上，其余清空
 				const mine = i === 0 ? segs : [];
-				applyWrap(host, mine);
+				applyWrap(host, mine, cls);
 				for (const twin of fillerTwins(host)) {
-					applyWrap(twin, mine);
+					applyWrap(twin, mine, cls);
 					mirrors.push(twin);
 				}
 			}
@@ -895,7 +961,11 @@
 					line.__fgHosts = [];
 				}
 			}
-			if (changed) requestRecalc();
+			if (changed) {
+				resetCalibration(); // 换歌/换行了，重新量一次
+				requestRecalc();
+			}
+			calibrate();
 			state.annotated = annotated;
 			state.srcRomaji = lines.filter((l) => l.__fgSource === 'romaji').length;
 			state.srcDict = lines.filter((l) => l.__fgSource === 'dict').length;
@@ -908,6 +978,210 @@
 			state.lastPassMs = Math.round(performance.now() - t0);
 			log(`pass ${state.lastPassMs}ms lines=${state.lineCount} annotated=${state.annotated} by=${state.matchedBy}`);
 		}
+	}
+
+	/**
+	 * 逐字宿主要给注音让出多少高度：正数往外让（注音戳出盒子的情况），
+	 * 负数把多让的收回来（注音已经算进盒子高度的情况）。写死一个值总有一边不对，
+	 * 所以量现场：注音上边离行盒上边的空隙 gap，目标是贴着顶留 1px。
+	 * 差多少就往 --fg-word-offset 上补多少（1:1，一两轮就收敛）。
+	 */
+	/*
+	 * 只管逐字歌词这一套：宿主是一个个词的 span，外面是 RNP 的 .rnp-karaoke-word
+	 * （inline-block），注音的高度撑不到外层行盒，得自己让。整行改写的普通行不用管 ——
+	 * 那是普通块，浏览器自己会把行撑开。
+	 *
+	 * 让位必须加在**每个**宿主上（.fg-word 不分有没有注音都加），不能只加在带注音的
+	 * 那一个上：inline-block 的 padding 会把里面的字整体压下去，只给一部分加，
+	 * 那个字就比左右邻居低一截（实测低 15px）。
+	 */
+	const CALIBRATIONS = [
+		{
+			key: 'word',
+			isMine: (line) => line.__fgHosts[0] !== line,
+			vars: ['--fg-word-offset', '--fg-word-tail'],
+			top: 0,
+			tail: 0,
+			tries: 0,
+		},
+	];
+	const CALIBRATE_MAX = 8;
+
+	function applyWordOffset() {
+		try {
+			const root = document.documentElement.style;
+			for (const c of CALIBRATIONS) {
+				root.setProperty(c.vars[0], c.top.toFixed(3) + 'em');
+				root.setProperty(c.vars[1], c.tail.toFixed(3) + 'em');
+			}
+		} catch (e) {
+			/* 没有 documentElement 就算了 */
+		}
+	}
+
+	function resetCalibration() {
+		for (const c of CALIBRATIONS) c.tries = 0;
+	}
+
+	/**
+	 * 量这一行：注音上边离行盒上边多远、行盒多高、注音多高。量不到就 null。
+	 * RNP 给每行挂了 `transform: scale()`，getBoundingClientRect 是缩放后的尺寸、
+	 * offsetHeight 不是（RNP 自己排版也用 clientHeight），拿两者的比值换算回去，
+	 * 否则拿当前行（放大）和远处的行（缩小）比会得出胡说八道的结论。
+	 */
+	function annotationGap(line) {
+		const rt = line.querySelector('.fg-rt');
+		if (!rt) return null;
+		try {
+			const lb = line.getBoundingClientRect();
+			const tb = rt.getBoundingClientRect();
+			const fs = parseFloat(getComputedStyle(line).fontSize);
+			const h = line.offsetHeight;
+			if (!lb.height || !tb.height || !fs || !h) return null; // 没有排版信息（离线测试）
+			const scale = lb.height / h;
+
+			// 注音和底字的关系：>0 说明压在底字上了。降级模式下注音是绝对定位的，
+			// 内核不会自动把它放到底字上方，得靠这个值把 padding 调够。
+			let overlap = null;
+			let holder = rt.parentElement;
+			while (holder && !(holder.classList && holder.classList.contains('fg-ruby')))
+				holder = holder.parentElement;
+			if (holder) {
+				const range = document.createRange();
+				range.selectNodeContents(holder);
+				range.setEndBefore(rt);
+				const base = range.getBoundingClientRect();
+				if (base && base.height) overlap = (tb.bottom - base.top) / scale;
+			}
+
+			return {
+				gap: (tb.top - lb.top) / scale,
+				overlap,
+				fontSize: fs,
+				lineHeight: h,
+				rtHeight: tb.height / scale,
+			};
+		} catch (e) {
+			return null;
+		}
+	}
+
+	// 量高度的候选最多看这么多条，别为了校准把整页都 reflow 一遍
+	const SAMPLE_LIMIT = 10;
+
+	/** 取最矮的一条：折行的行会高出一整行，拿来比会得出错误的目标 */
+	function shortest(lines) {
+		let best = null;
+		let n = 0;
+		for (const l of lines) {
+			if (++n > SAMPLE_LIMIT) break;
+			let h;
+			try {
+				h = l.offsetHeight; // 避开 transform: scale()
+			} catch (e) {
+				continue;
+			}
+			if (!h) continue;
+			if (!best || h < best.h) best = { line: l, h };
+		}
+		return best;
+	}
+
+	/**
+	 * 拿同一份歌词里「没有注音的那些行」当基准 —— 它们就是这套 CSS 下一行该有多高。
+	 * 有注音的行应该正好高出一个注音的高度，多出来的都是白占的。
+	 */
+	function referenceHeight(sample) {
+		const plain = lastLines.filter(
+			(l) => l !== sample && l.__fgHosts && !l.__fgHosts.length && !l.querySelector('.fg-rt')
+		);
+		// 优先找结构一样的（逐字行比逐字行），没有就退而求其次用任意一条没注音的行
+		const best =
+			shortest(plain.filter((l) => l.className === sample.className)) || shortest(plain);
+		if (best) {
+			try {
+				const fs = parseFloat(getComputedStyle(best.line).fontSize);
+				if (fs) return best.h / fs; // 换成 em，字号不同也能比
+			} catch (e) {
+				/* 往下走兜底 */
+			}
+		}
+		// 整首歌每一行都有注音时就没有基准行了 —— 退回 CSS 里写的 line-height，
+		// 那本来就是「一行该有多高」（RNP 明确写了 1.2 / 1.5，不是 normal）
+		try {
+			const cs = getComputedStyle(sample);
+			const lh = parseFloat(cs.lineHeight);
+			const fs = parseFloat(cs.fontSize);
+			if (lh && fs) return lh / fs;
+		} catch (e) {
+			/* 真拿不到就放弃 */
+		}
+		return null;
+	}
+
+	/** 这个上下文当前拿来量的那一行（取最矮的，避开折行的） */
+	function calibrationSample(c) {
+		const best = shortest(
+			lastLines.filter(
+				(l) => l.__fgHosts && l.__fgHosts.length && c.isMine(l) && l.querySelector('.fg-rt')
+			)
+		);
+		return best && best.line;
+	}
+
+	function calibrate() {
+		// 降级模式下注音是绝对定位的，不占高度也没有可调的抓手（那种内核里
+		// inline-block 的 margin 不参与行盒、padding 又会把字压下去），不用校准
+		if (!hasRuby()) return;
+		for (const c of CALIBRATIONS) {
+			if (c.tries >= CALIBRATE_MAX) continue;
+			const line = calibrationSample(c);
+			if (!line) continue;
+			const m = annotationGap(line);
+			if (!m) continue;
+
+			// 注音贴着行盒顶，留 1px
+			const dTop = m.gap - 1;
+			if (Math.abs(dTop) > 1.5) {
+				c.tries++;
+				c.top = clampEm(c.top - dTop / m.fontSize);
+				applyWordOffset();
+				log(
+					`校准[${c.key}] 顶：gap=${Math.round(m.gap)}px` +
+						(m.overlap == null ? '' : ` 压字=${Math.round(m.overlap)}px`) +
+						` → ${c.vars[0]}: ${c.top}em`
+				);
+				schedule(60);
+				continue;
+			}
+
+			// 2) 底：整行应该只比没注音的行高出一个注音，多的收掉
+			const refEm = referenceHeight(line);
+			if (refEm == null) {
+				c.tries = CALIBRATE_MAX; // 没有基准行可比，就到这儿
+				continue;
+			}
+			const wantPx = refEm * m.fontSize + m.rtHeight + 1;
+			const dBottom = m.lineHeight - wantPx;
+			if (Math.abs(dBottom) > 1.5) {
+				c.tries++;
+				c.tail = clampEm(c.tail - dBottom / m.fontSize);
+				applyWordOffset();
+				log(
+					`校准[${c.key}] 底：行高 ${Math.round(m.lineHeight)}px，基准 ` +
+						`${Math.round(refEm * m.fontSize)}px + 注音 ${Math.round(m.rtHeight)}px → ` +
+						`${c.vars[1]}: ${c.tail}em`
+				);
+				schedule(60);
+				continue;
+			}
+
+			c.tries = CALIBRATE_MAX; // 这个上下文两头都对上了
+		}
+	}
+
+	function clampEm(v) {
+		return Math.max(-2, Math.min(2, Math.round(v * 1000) / 1000));
 	}
 
 	/**
@@ -986,6 +1260,88 @@
 		}, 1500);
 	}
 
+	/**
+	 * 量一行的实际排版：注音相对底字偏了多少、词盒被撑宽了多少、
+	 * 逐字歌词是怎么切的。位置不对时靠这个看，比截图准。
+	 *   JPFurigana.dumpLine()   第一行已注音的
+	 *   JPFurigana.dumpLine(2)  第三行
+	 */
+	function dumpLine(index) {
+		const done = lastLines.filter((l) => l.__fgHosts && l.__fgHosts.length);
+		const line = done[index || 0];
+		if (!line) return `没有已注音的行（共 ${lastLines.length} 行）`;
+
+		const mid = (r) => (r.left + r.right) / 2;
+		const px = (n) => Math.round(n * 10) / 10;
+
+		// 没有排版信息（比如离线测试环境）时全给 null，别让诊断本身炸掉
+		const rect = (o) => {
+			try {
+				const r = o.getBoundingClientRect();
+				return r && typeof r.left === 'number' ? r : null;
+			} catch (e) {
+				return null;
+			}
+		};
+
+		const lineRect = rect(line);
+		const rubies = [...line.querySelectorAll('.fg-ruby')].map((ruby) => {
+			const rt = ruby.querySelector('.fg-rt');
+			const range = document.createRange();
+			range.selectNodeContents(ruby);
+			if (rt) range.setEndBefore(rt);
+			const base = rect(range) || { left: 0, right: 0, top: 0, width: 0 };
+			const rtRect = rt && rect(rt);
+			const word = ruby.parentElement && ruby.parentElement.closest('.rnp-karaoke-word');
+			const wordRect = word && rect(word);
+			return {
+				底字: range.toString(),
+				读音: rt ? rt.textContent : '',
+				底字宽: px(base.width),
+				// 0 = 注音正对着底字；负数 = 注音偏左
+				注音横向偏移: rtRect ? px(mid(rtRect) - mid(base)) : null,
+				// 注音底边离底字顶边多远，负数说明压在底字上
+				注音纵向间距: rtRect ? px(base.top - rtRect.bottom) : null,
+				词盒宽: wordRect ? px(wordRect.width) : null,
+				// >0 说明注音戳出了这一行的盒子外面 —— RNP 按盒子高度排行距，会压到上一行
+				注音戳出行外: rtRect && lineRect ? px(lineRect.top - rtRect.top) : null,
+			};
+		});
+
+		const gap = annotationGap(line);
+		const info = {
+			build: BUILD,
+			ruby排版: hasRuby() ? '内核原生' : '降级（注音绝对定位）',
+			注音让位: hasRuby()
+				? CALIBRATIONS.map(
+						(c) => `${c.key}: 顶 ${c.top}em / 底 ${c.tail}em${c.tries >= CALIBRATE_MAX ? '（已收敛）' : ''}`
+				  ).join('  |  ')
+				: '降级模式不需要（注音不占高度）',
+			注音顶离行盒顶: gap ? Math.round(gap.gap * 10) / 10 : null,
+			注音压住底字: gap && gap.overlap != null ? Math.round(gap.overlap * 10) / 10 : null,
+			没注音的行高: (() => {
+				const em = referenceHeight(line);
+				return em == null || !gap ? null : Math.round(em * gap.fontSize * 10) / 10;
+			})(),
+			matchedBy: state.matchedBy,
+			readingSource: line.__fgSource,
+			karaoke: config.karaoke,
+			text: line.__fgText,
+			行: line.tagName.toLowerCase() + '.' + line.className,
+			宿主数: line.__fgHosts.length,
+			宿主: line.__fgHosts[0] === line ? '整行（没走逐字分发）' : line.__fgHosts[0].tagName.toLowerCase() + '.' + line.__fgHosts[0].className,
+			// 逐字歌词原本是怎么切的（改写前存下来的节点）
+			逐字切法: line.__fgHosts.map((h) => (h.__fgOrig || []).map((n) => n.textContent).join('')),
+			filler副本数: (line.__fgMirrors || []).length,
+			注音: rubies,
+			行高: px((lineRect || { height: 0 }).height),
+			html: line.outerHTML.slice(0, 1200),
+		};
+		console.log(LOG, 'dumpLine', info);
+		if (console.table) console.table(rubies);
+		return info;
+	}
+
 	// ------------------------------------------------------------------ 样式
 
 	function styleEl(id) {
@@ -999,17 +1355,66 @@
 	}
 
 	function updateStyles() {
+		resetCalibration(); // 注音字号变了，让位的高度也要重量
 		styleEl('jp-furigana-style').textContent = `
 			.fg-line {
 				display: inline;
-				${config.lineHeight > 0 ? `line-height: ${config.lineHeight / 10};` : ''}
+			}
+			/*
+			 * 我们插进去的包装 span 不能再吃一层透明度。RNP 的
+			 * .rnp-karaoke-word span:not(.rnp-karaoke-word-filler) { opacity: .4 }
+			 * 匹配的是**每一层**嵌套 span，透明度会一层层相乘：普通字过两层是 0.4²≈0.16，
+			 * 带注音的字多一层 .fg-ruby 就成了 0.4³≈0.06，淡到几乎看不见。
+			 * 用 !important 是因为对方的选择器更具体，压不过去。
+			 */
+			.fg-line,
+			.fg-ruby {
+				opacity: 1 !important;
+			}
+			/*
+			 * 让位：RNP 的逐字歌词里每个词是独立的 inline-block，注音的高度撑不到外层
+			 * 行盒（clientHeight 不变），而 RNP 正是按 clientHeight 排行距的，于是注音
+			 * 压到上一行头上。所以在逐字宿主上把高度让出来，让多少是量出来的（见
+			 * calibrate）。整行改写的普通行不用管，那是普通块，浏览器自己会撑开。
+			 *
+			 * 关键：让位必须加在**每个** .fg-word 上（不分有没有注音）—— inline-block 的
+			 * padding 会把里面的字整体压下去，只给带注音的那个加，它就比左右邻居低一截
+			 * （实测低 15px，看着就是「这个字掉下去了」）。
+			 */
+			.fg-line.fg-word {
+				display: inline-block;
+				padding-top: var(--fg-word-offset, 0em);
+				margin-bottom: var(--fg-word-tail, 0em);
 			}
 			.fg-line ruby {
 				ruby-position: over;
 				-webkit-ruby-position: before;
 				ruby-align: center;
 			}
-			.fg-line rt.fg-rt {
+			/*
+			 * 内核不认 ruby 时的降级：不用 ruby/rt，注音是普通 span 绝对定位在底字正上方。
+			 * .fg-ruby 保持 inline（不能改成 inline-block 再加 padding —— 那样只有带注音的
+			 * 字会被压低），注音落在行与行本来的空隙里，不占行高也不撑宽底字。
+			 */
+			${
+				hasRuby()
+					? ''
+					: `
+			.fg-ruby {
+				position: relative;
+			}
+			.fg-ruby > .fg-rt {
+				position: absolute;
+				left: 50%;
+				bottom: 100%;
+				-webkit-transform: translateX(-50%);
+				transform: translateX(-50%);
+				display: block;
+				pointer-events: none;
+			}
+			`
+			}
+			.fg-line .fg-rt {
 				font-size: ${config.rtSize}%;
 				opacity: ${config.rtOpacity / 100};
 				font-weight: normal;
@@ -1227,12 +1632,6 @@
 			<div class="fg-row"><label><input type="checkbox" data-k="onlyFirstLine"> 只给原文注音，跳过翻译和罗马音</label></div>
 			<div class="fg-row"><label><input type="checkbox" data-k="skipCredits"> 跳过「作词:／编曲:」等制作信息行</label></div>
 			<div class="fg-row"><label><input type="checkbox" data-k="skipNoKanaLines"> 跳过没有假名的行（中文翻译、版权声明）</label></div>
-			<div class="fg-row">
-				<label>行高</label>
-				<input type="range" data-k="lineHeight" min="0" max="30" step="1">
-				<span data-v="lineHeight"></span>
-				<span class="fg-hint">0 = 不改；注音被上一行裁掉时调大</span>
-			</div>
 			${DEV ? ADVANCED_UI : ''}
 		`;
 
@@ -1265,12 +1664,7 @@
 		}
 
 		// 滑块旁边那行数值怎么显示
-		const fmt = (key) =>
-			key === 'lineHeight'
-				? config.lineHeight > 0
-					? (config.lineHeight / 10).toFixed(1)
-					: '不改'
-				: config[key] + '%';
+		const fmt = (key) => config[key] + '%';
 
 		// 改了这些设置需要把已有的注音全部重做
 		const NEEDS_RESCAN = [
@@ -1399,7 +1793,9 @@
 			},
 			state,
 			core: FuriganaCore,
+			build: BUILD,
 			probe,
+			dumpLine,
 			rescan,
 			enable,
 			disable,
@@ -1416,7 +1812,8 @@
 		};
 		console.log(
 			LOG,
-			`已加载${DEV ? '（开发模式）' : ''}，控制台里可以用 JPFurigana.probe() 查看歌词定位情况`
+			`已加载 ${BUILD}${DEV ? '（开发模式）' : ''}，` +
+				`控制台里可以用 JPFurigana.probe() 看歌词定位、JPFurigana.dumpLine() 看注音排版`
 		);
 	});
 })();
