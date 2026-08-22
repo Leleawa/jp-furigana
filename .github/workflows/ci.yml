@@ -54,6 +54,17 @@ jobs:
       - name: 接口链路 (缺 fixture 则跳过)
         run: node tools/test-api-romaji.js
 
+      # RefinedNowPlaying 的逐字歌词 DOM，用 jsdom 模拟着跑一遍
+      - name: 第三方歌词插件兼容 (RNP / LyricBar 逐字)
+        run: |
+          npm i jsdom --no-save --silent
+          node tools/test-rnp-dom.js
+          node tools/test-rnp-dom.js slide
+          node tools/test-rnp-dom.js float noruby
+          node tools/test-rnp-dom.js slide noruby
+          node tools/test-rnp-dom.js lyricbar
+          node tools/test-rnp-dom.js lyricbar noruby
+
       - name: 打包冒烟
         run: node tools/pack.js
 
