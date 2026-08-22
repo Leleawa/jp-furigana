@@ -6,12 +6,16 @@ on:
   pull_request:
   workflow_dispatch:
 
-# 只做检查，不产出任何东西 —— release 手动发
+# 检查 + 打包；main 上如果 manifest 里的版本还没发过 release，就自动发一个
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # 建 release 用
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # release 说明要按 tag 取提交历史，浅克隆不够
 
       - uses: actions/setup-node@v4
         with:
@@ -79,3 +83,29 @@ jobs:
             echo "条目名里有反斜杠"; exit 1
           fi
           echo "产物校验通过"
+
+      # 版本号发过就跳过，所以合到 main 但没 bump 版本时不会重复发
+      - name: 发布 Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(node -p "require('./src/manifest.json').version")
+          tag="v$version"
+          if gh release view "$tag" > /dev/null 2>&1; then
+            echo "$tag 已经发过了，跳过"
+            exit 0
+          fi
+
+          # 说明就是上一个 release 之后的提交；没有上一个 release 就把历史全列出来
+          notes="$RUNNER_TEMP/release-notes.md"
+          prev=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' || true)
+          if [ -n "$prev" ] && git rev-parse -q --verify "refs/tags/$prev" > /dev/null; then
+            echo "上一个 release: $prev"
+            git log --no-merges --pretty='- %s' "$prev..HEAD" > "$notes"
+          else
+            git log --no-merges --pretty='- %s' > "$notes"
+          fi
+          cat "$notes"
+
+          gh release create "$tag" builds/jp-furigana.plugin --title "$version" --notes-file "$notes"
