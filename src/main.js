@@ -42,8 +42,11 @@
 		'ul.lyric li p',
 		'div.lyric ul li p',
 		'.lyric-line, .lyric-next-p', // NCM 2.x，在 2.10.13 上实测命中，别删
-		'div[class^="rnp-lyrics"] div[class^="rnp-lyrics-line-original"]', // RefinedNowPlaying
-		'div[class^="lyric-bar-inner"] div[class^="rnp-lyrics-line-original"]', // LyricBar
+		// RefinedNowPlaying：开了逐字歌词后，原文行 .rnp-lyrics-line-original 会被换成
+		// .rnp-lyrics-line-karaoke（两者互斥渲染）。但离当前行 10 行以外的还是 -original，
+		// 所以必须写在同一条选择器里 —— 分成两条的话会先命中那些看不见的远处行就 return 了。
+		'div[class^="rnp-lyrics"] div[class^="rnp-lyrics-line-original"], div[class^="rnp-lyrics"] div[class^="rnp-lyrics-line-karaoke"]', // RefinedNowPlaying
+		'div[class^="lyric-bar-inner"] div[class^="rnp-lyrics-line-original"], div[class^="lyric-bar-inner"] div[class^="rnp-lyrics-line-karaoke"]', // LyricBar
 		'div[class^="lyricMainLine"]', // AMLL 类苹果歌词
 	];
 
@@ -362,14 +365,31 @@
 
 	// ------------------------------------------------------------------ 文本工具
 
-	/** 元素的「原文」：忽略我们注上去的 rt / rp */
+	/** 我们注上去的读音：有 ruby 排版时是 <rt>，降级时是 <span class="fg-rt"> */
+	function isAnnotation(node) {
+		if (!node || node.nodeType !== 1) return false;
+		const n = node.nodeName;
+		if (n === 'RT' || n === 'RP') return true;
+		return !!(node.classList && node.classList.contains('fg-rt'));
+	}
+
+	function isFiller(node) {
+		return (
+			node &&
+			node.nodeType === 1 &&
+			node.classList &&
+			node.classList.contains('rnp-karaoke-word-filler')
+		);
+	}
+
+	/** 元素的「原文」：忽略我们注上去的 rt / rp，以及 RNP 的 filler 副本 */
 	function plainText(el) {
+		if (isFiller(el) || isAnnotation(el)) return '';
 		let out = '';
 		const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
 			acceptNode(node) {
 				for (let p = node.parentNode; p && p !== el; p = p.parentNode) {
-					const n = p.nodeName;
-					if (n === 'RT' || n === 'RP') return NodeFilter.FILTER_REJECT;
+					if (isAnnotation(p) || isFiller(p)) return NodeFilter.FILTER_REJECT;
 				}
 				return NodeFilter.FILTER_ACCEPT;
 			},
@@ -557,6 +577,64 @@
 		host.__fgWrap = wrap;
 	}
 
+	/** 把这一行上所有改动（宿主 / filler 副本 / 行本身）还原成 React 的原样 */
+	function restoreLine(line) {
+		if (line.__fgHosts) for (const h of line.__fgHosts) restore(h);
+		if (line.__fgMirrors) for (const m of line.__fgMirrors) restore(m);
+		restore(line);
+		line.__fgHosts = null;
+		line.__fgMirrors = null;
+	}
+
+	/**
+	 * 宿主同一个词里的 filler 副本。副本要跟着注音一起改，
+	 * 不然加了 ruby 的本体变宽、副本没变，滑动高亮就会和字对不上。
+	 */
+	function fillerTwins(host) {
+		const word = host.parentElement;
+		if (!word || !word.classList || !word.classList.contains('rnp-karaoke-word')) return [];
+		return [...word.children].filter((c) => c !== host && isFiller(c));
+	}
+
+	// 合并跨度上限：再长就不并了，免得把半行糊成一个词、逐字动画整段一起亮
+	const MAX_MERGE = 8;
+
+	/**
+	 * 逐字歌词把一个词拆成好几个 span 时（网易云的 yrc 对汉字常常是一字一个），
+	 * 注音会跨 span。每个 span 都是独立的 inline-block，ruby 只能落在第一个上，
+	 * 那个盒子被注音撑宽、后面的字被挤开，看着就是「注音跑到字左边、字之间裂开」。
+	 * 所以把被注音跨过的几个 span 合成一组：组里第一个承载整段带注音的内容，
+	 * 其余的清空（清空的 span 还在，逐字动画和 RNP 按下标取的动画目标都不受影响，
+	 * 只是并进来的那几个字跟着头一个字的时间一起亮）。
+	 */
+	function groupHosts(hosts, lens, segments) {
+		// 落在注音词内部的位置 = 不能从这里切开
+		const unsafe = new Set();
+		let p = 0;
+		for (const seg of segments) {
+			const start = p;
+			p += seg.text.length;
+			if (!seg.rt) continue;
+			for (let i = start + 1; i < p; i++) unsafe.add(i);
+		}
+
+		const groups = [];
+		let cur = null;
+		let pos = 0;
+		for (let i = 0; i < hosts.length; i++) {
+			if (!cur) cur = { hosts: [], from: pos, to: pos };
+			cur.hosts.push(hosts[i]);
+			pos += lens[i];
+			cur.to = pos;
+			const straddles = unsafe.has(pos) && cur.to - cur.from < MAX_MERGE;
+			if (straddles && i < hosts.length - 1) continue; // 切在词中间，把下一个也并进来
+			groups.push(cur);
+			cur = null;
+		}
+		if (cur) groups.push(cur);
+		return groups;
+	}
+
 	/** 取 segments 在 [from, to) 区间内的部分；被切断的注音只保留在起始那一段上 */
 	function sliceSegments(segments, from, to) {
 		const out = [];
@@ -617,14 +695,17 @@
 			if (!h.__fgWrap || h.__fgWrap.parentNode !== h) return false;
 			if (h.childNodes.length !== 1) return false;
 		}
+		// filler 副本不参与文字比对（它的内容是重复的），只确认还挂着
+		for (const m of line.__fgMirrors || []) {
+			if (!m.isConnected) return false;
+			if (!m.__fgWrap || m.__fgWrap.parentNode !== m) return false;
+		}
 		return hostsText(line) === line.__fgText;
 	}
 
 	function processLine(line) {
 		// 先把之前改过的地方全部还原，让 React 的最新内容显形
-		if (line.__fgHosts) for (const h of line.__fgHosts) restore(h);
-		restore(line);
-		line.__fgHosts = null;
+		restoreLine(line);
 		line.__fgDirty = false;
 
 		const text = plainText(line);
@@ -665,30 +746,42 @@
 		line.__fgSource = source;
 
 		let hosts = [line];
+		let lens = [text.length];
 		if (config.karaoke) {
 			const leaves = inlineLeaves(line, 0);
-			const total = leaves.reduce((n, el) => n + plainText(el).length, 0);
+			const sizes = leaves.map((el) => plainText(el).length);
+			const total = sizes.reduce((n, len) => n + len, 0);
 			// 只有叶子文本刚好拼成整行时才分发，否则偏移会错位
-			if (leaves.length > 1 && total === text.length) hosts = leaves;
+			if (leaves.length > 1 && total === text.length) {
+				hosts = leaves;
+				lens = sizes;
+			}
 		}
 
-		let pos = 0;
-		for (const host of hosts) {
-			const len = hosts.length === 1 ? text.length : plainText(host).length;
-			applyWrap(host, sliceSegments(segments, pos, pos + len));
-			pos += len;
+		const mirrors = [];
+		for (const group of groupHosts(hosts, lens, segments)) {
+			const segs = sliceSegments(segments, group.from, group.to);
+			for (let i = 0; i < group.hosts.length; i++) {
+				const host = group.hosts[i];
+				// 整段内容放在组里第一个 span 上，其余清空
+				const mine = i === 0 ? segs : [];
+				applyWrap(host, mine);
+				for (const twin of fillerTwins(host)) {
+					applyWrap(twin, mine);
+					mirrors.push(twin);
+				}
+			}
 		}
 
 		line.__fgText = text;
 		line.__fgHosts = hosts;
+		line.__fgMirrors = mirrors;
 		return true;
 	}
 
 	function removeAll(lines) {
 		for (const line of lines || []) {
-			if (line.__fgHosts) for (const h of line.__fgHosts) restore(h);
-			restore(line);
-			line.__fgHosts = null;
+			restoreLine(line);
 			line.__fgText = null;
 		}
 	}
@@ -732,19 +825,27 @@
 			removeAll(lastLines.filter((l) => !set.has(l)));
 
 			let annotated = 0;
+			let changed = 0;
 			for (const line of lines) {
 				if (isClean(line)) {
 					if (line.__fgHosts.length) annotated++;
 					continue;
 				}
+				const had = !!(line.__fgHosts && line.__fgHosts.length);
 				try {
-					if (processLine(line)) annotated++;
+					if (processLine(line)) {
+						annotated++;
+						changed++;
+					} else if (had) {
+						changed++; // 之前有注音、现在没了，行高同样会变
+					}
 				} catch (e) {
 					console.warn(LOG, '处理歌词行失败', e, line);
 					line.__fgText = plainText(line);
 					line.__fgHosts = [];
 				}
 			}
+			if (changed) requestRecalc();
 			state.annotated = annotated;
 			state.srcRomaji = lines.filter((l) => l.__fgSource === 'romaji').length;
 			state.srcDict = lines.filter((l) => l.__fgSource === 'dict').length;
@@ -757,6 +858,27 @@
 			state.lastPassMs = Math.round(performance.now() - t0);
 			log(`pass ${state.lastPassMs}ms lines=${state.lineCount} annotated=${state.annotated} by=${state.matchedBy}`);
 		}
+	}
+
+	/**
+	 * RefinedNowPlaying 是自己算每行的位移来滚动的，行高只在歌词/字号/设置变化时量一次。
+	 * 我们插进去的注音会让行变高，它手里的还是旧高度，于是行与行会叠在一起。
+	 * 它自己留了 recalc-lyrics 这个 window 事件用来强制重量，借用一下。
+	 */
+	let lastRecalc = 0;
+	function requestRecalc() {
+		if (!/rnp|lyric-bar/.test(state.matchedBy || '')) return;
+		const now = performance.now();
+		if (now - lastRecalc < 400) return; // 连着换行时别一直发
+		lastRecalc = now;
+		// 放到本次 pass 之后再发，免得它同步改的 DOM 被我们的 takeRecords() 吞掉
+		setTimeout(() => {
+			try {
+				window.dispatchEvent(new Event('recalc-lyrics'));
+			} catch (e) {
+				/* 没这个插件就没人听 */
+			}
+		}, 0);
 	}
 
 	let timer = null;
