@@ -55,6 +55,18 @@ const CASES = [
 	],
 	['明日、君と', 'a shi ta ki mi to', '明日(あした)、君(きみ)と'],
 
+	// 四つ仮名：音译只有 ji/zu，ヂ/ヅ 要从词典读音补回来
+	[
+		'君が元気になれるまで続けます',
+		'ki mi ga ge n ki ni na re ru ma de tsu zu ke ma su',
+		'君(きみ)が元気(げんき)になれるまで続(つづ)けます',
+	],
+	[
+		'惑い漂う散り散りの星 雲が隠す',
+		'ma do i ta da yo u chi ri ji ri no ho shi ku mo ga ka ku su',
+		'惑(まど)い漂(ただよ)う散(ち)り散(ぢ)りの星(ほし) 雲(くも)が隠(かく)す',
+	],
+
 	// 夹英文，罗马字转不了，退回词典
 	['Hello 世界', 'Hello se ka i', null],
 ];
