@@ -276,6 +276,60 @@
 			.replace(/ー/g, '[ーｰアイウエオ]');
 	}
 
+	/** looseAnchorPattern 每个假名只匹配一个字符，锚点定长 */
+	function anchorLength(text) {
+		return toKatakana(text).replace(/[^ァ-ヺーｰ]/g, '').length;
+	}
+
+	/**
+	 * 把整行读音切给「锚点 / 空档」序列。锚点必须原样命中，空档至少一个字符。
+	 * 能切的方式不止一种时（昨日の → キノウノ，第一个 ノ 也能当锚点），
+	 * 选各空档长度与词典读音长度偏差之和最小的；并列时取靠前空档更短的，
+	 * 和原先懒惰匹配的倾向一致。切不开返回 null。
+	 */
+	function splitReading(parts, reading) {
+		const n = reading.length;
+		// best[i][p]：从 parts[i] 起、读音从 p 起匹配到结尾的最小代价
+		const best = [];
+		const pick = [];
+		for (let i = parts.length; i >= 0; i--) {
+			best[i] = new Array(n + 1).fill(Infinity);
+			pick[i] = new Array(n + 1).fill(-1);
+			for (let p = 0; p <= n; p++) {
+				if (i === parts.length) {
+					if (p === n) best[i][p] = 0;
+					continue;
+				}
+				const part = parts[i];
+				if (part.re) {
+					part.re.lastIndex = p;
+					const m = part.re.exec(reading);
+					if (m) {
+						best[i][p] = best[i + 1][p + part.len];
+						pick[i][p] = part.len;
+					}
+					continue;
+				}
+				for (let len = 1; p + len <= n; len++) {
+					const c = Math.abs(len - part.want) + best[i + 1][p + len];
+					if (c < best[i][p]) {
+						best[i][p] = c;
+						pick[i][p] = len;
+					}
+				}
+			}
+		}
+		if (best[0][0] === Infinity) return null;
+
+		const out = [];
+		for (let i = 0, p = 0; i < parts.length; i++) {
+			const len = pick[i][p];
+			if (!parts[i].re) out.push(reading.substr(p, len));
+			p += len;
+		}
+		return out;
+	}
+
 	/**
 	 * 一段读音要分给多个汉字块时，用词典读音的长度来定边界。
 	 * 分不开返回 null（调用方保留这一段的词典读音）。
@@ -366,36 +420,30 @@
 				groups.push(gap);
 				gap = null;
 			}
-			groups.push({ anchor });
+			groups.push({ anchor, len: anchorLength(seg.text) });
 		}
 		if (gap) groups.push(gap);
 
-		let pattern = '^';
+		const parts = [];
 		const gaps = [];
 		for (const g of groups) {
 			if (g.anchor != null) {
-				pattern += g.anchor;
+				parts.push({ re: new RegExp(g.anchor, 'y'), len: g.len });
 				continue;
 			}
 			if (!g.items.some((it) => it.rt)) continue; // 只有标点，不占读音
-			pattern += '(.+?)';
+			parts.push({ want: g.items.reduce((n, it) => n + (it.rt ? toKatakana(it.rt).length : 0), 0) });
 			gaps.push(g);
 		}
-		pattern += '$';
 		if (!gaps.length) return null;
 
-		let m;
-		try {
-			m = new RegExp(pattern).exec(toKatakana(reading));
-		} catch (e) {
-			return null;
-		}
-		if (!m) return null;
+		const captures = splitReading(parts, toKatakana(reading));
+		if (!captures) return null;
 
 		let usedOfficial = false;
 		gaps.forEach((g, i) => {
 			const items = g.items.filter((it) => it.rt);
-			const readings = distributeReading(items, m[i + 1]);
+			const readings = distributeReading(items, captures[i]);
 			if (!readings) return; // 分不开，这一段保留词典读音
 			items.forEach((it, k) => {
 				it.rt = restoreYotsugana(it.rt, readings[k]);
