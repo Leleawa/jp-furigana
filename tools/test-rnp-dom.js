@@ -29,6 +29,7 @@ const LINES = [
 	['思い', 'で', 'は', 'せめて', 'もの', '慰め'],
 	['いつ', 'まで', 'も', 'あなた', 'は', 'ここ', 'に', 'いる'], // 没汉字，应当不动
 	['まだ', '最', '初', 'は'], // yrc 常把汉字一字一切，「最初」的读音跨了两个 span
+	['宇宙', '(そら)', 'を', '見る'], // 作词者自带注音：括号藏起来，读音挂到汉字上
 ];
 const TRANS = [
 	'哪怕有时我们伤害了彼此',
@@ -36,6 +37,7 @@ const TRANS = [
 	'即使只有回忆来安慰',
 	'无论何时你都在此处',
 	'从最初还是',
+	'看向天空',
 ];
 // 离当前行 10 行以外的，RNP 仍然渲染成 -original
 const FAR = ['たった一言伝えたい', 'もう一度あなたに会えるなら'];
@@ -222,6 +224,18 @@ function check(ok, label, detail) {
 	// rt 是我们加的，filler 是 slide 动画本来就有的重复副本，都不算原文
 	splitBody.querySelectorAll('.fg-rt, .rnp-karaoke-word-filler').forEach((el) => el.remove());
 	check(splitBody.textContent === 'まだ最初は', '整行原文没多也没少', splitBody.textContent);
+
+	const inline = karaoke[5];
+	const hide = inline.querySelector('.fg-hide');
+	check(hide && hide.style.display === 'none' && hide.textContent === '(そら)', '自带注音的括号被藏起来了');
+	check(
+		[...inline.querySelectorAll('.fg-ruby')].some((h) => baseText(h) === '宇宙' && h.querySelector('.fg-rt').textContent === 'そら'),
+		'括号里的读音挂到了汉字上'
+	);
+	const inlineBody = inline.cloneNode(true);
+	inlineBody.querySelectorAll('.fg-rt, .rnp-karaoke-word-filler').forEach((el) => el.remove());
+	check(inlineBody.textContent === '宇宙(そら)を見る', '藏起来的括号仍在 DOM 里，原文没少', inlineBody.textContent);
+
 	check(
 		[...win.document.querySelectorAll('.rnp-lyrics-line-original')].every(
 			(el) => el.querySelectorAll('.fg-rt').length > 0

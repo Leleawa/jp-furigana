@@ -9,7 +9,8 @@ globalThis.__FURIGANA_DICT_LOADER__ = (p) =>
 const kuromoji = require(path.join(__dirname, '..', 'src', 'kuromoji.js'));
 const core = require(path.join(__dirname, '..', 'src', 'furigana.js'));
 
-// [歌词原文, 网易云音译, 期望结果]  期望为 null 表示应当退回词典
+// [歌词原文, 网易云音译, 期望结果]  期望为 null 表示应当退回词典；
+// 音译为 null 的用例只检查词典结果。期望里的 [..] 是 hidden 片段
 const CASES = [
 	[
 		'愛するすべてを護れるように強くなる',
@@ -105,12 +106,35 @@ const CASES = [
 	// 机器音译把「今日は」当成问候语
 	['今日はいい天気', 'ko n ni chi ha i i te n ki', '今日(きょう)はいい天気(てんき)'],
 
-	// 夹英文，罗马字转不了，退回词典
-	['Hello 世界', 'Hello se ka i', null],
+	// 夹英文 / 数字：音译里原样留着，转成占位符，和原文的英文对上
+	['Hello 世界', 'Hello se ka i', 'Hello 世界(せかい)'],
+	['my 夢を見た', 'my yu me wo mi ta', 'my 夢(ゆめ)を見(み)た'],
+	['君と3 2 1で', 'ki mi to 3 2 1 de', '君(きみ)と3 2 1で'],
+	['Oh 運命の日', 'Oh sa da me no hi', 'Oh 運命(さだめ)の日(ひ)'],
+	// 英文里像罗马字的部分（No、to）被转成了假名，占位符两边带着它们
+	['Hell No 夢の中', 'Hell no yu me no na ka', 'Hell No 夢(ゆめ)の中(なか)'],
+	['Back to 故郷へ', 'Back to fu ru sa to he', 'Back to 故郷(ふるさと)へ'],
+
+	// 和声括号：音译不带括号里那段，跳过它再对
+	['夜空に（夜空に）', 'yo zo ra ni', '夜空(よぞら)に（夜空(よぞら)に）'],
+	['明日を（歌う）', 'a su wo u ta u', '明日(あす)を（歌(うた)う）'],
+
+	// 作词者自带的注音：括号里的假名直接用，括号藏起来
+	['宇宙(そら)を見る', 'so ra wo mi ru', '宇宙(そら)[(そら)]を見(み)る'],
+	['宇宙（そら）へ', null, '宇宙(そら)[（そら）]へ'],
+
+	// 只用词典时的读音修正（取自官方音译的统计）
+	['失くした鍵', null, '失(な)くした鍵(かぎ)'],
+	['何回も回る', null, '何(なん)回(かい)も回(まわ)る'],
+	['回レ回レ', null, '回(まわ)レ回(まわ)レ'],
+	['君と僕', null, '君(きみ)と僕(ぼく)'],
+	['田中君と', null, '田中(たなか)君(くん)と'],
+	['風の音', null, '風(かぜ)の音(おと)'],
+	['今夜と今', null, '今夜(こんや)と今(いま)'],
 ];
 
 function render(segs) {
-	return segs.map((s) => (s.rt ? `${s.text}(${s.rt})` : s.text)).join('');
+	return segs.map((s) => (s.hidden ? `[${s.text}]` : s.rt ? `${s.text}(${s.rt})` : s.text)).join('');
 }
 
 // 网易云 2.x 的歌词用 &nbsp; (U+00A0) 而不是普通空格，实测数据：
@@ -150,9 +174,11 @@ kuromoji
 		let fail = 0;
 		for (const [text, romaji, expect] of CASES) {
 			const dictSegs = core.tokensToSegments(tokenizer.tokenize(text), { kana: 'hiragana' });
-			const kana = core.romajiToKana(romaji);
+			const kana = romaji == null ? null : core.romajiToKana(romaji);
 			const segs = kana
 				? core.segmentsFromReading(text, kana, dictSegs, { kana: 'hiragana' })
+				: romaji == null
+				? dictSegs
 				: null;
 			const got = segs ? render(segs) : null;
 

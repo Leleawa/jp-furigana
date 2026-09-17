@@ -22,9 +22,15 @@
 	const RE_NOT_KANJI_HEAD = new RegExp('^[^' + KANJI + ']+');
 	// 平假名 + 片假名 + 长音符
 	const RE_HAS_KANA = /[ぁ-ゖァ-ヺ]/;
-	// 词典读不出、音译里却有读音的字符
 	const RE_HAS_KANA_OR_LONG = /[ぁ-ゖァ-ヺーｰ]/;
+	// 词典读不出、音译里却有读音的字符
 	const RE_UNREADABLE = new RegExp('[A-Za-z0-9Ａ-Ｚａ-ｚ０-９' + KANJI + ']');
+	// 一串英文/数字（中间可以夹空格和常见标点）
+	const LATIN = 'A-Za-z0-9Ａ-Ｚａ-ｚ０-９';
+	const RE_LATIN_RUN = new RegExp(`[${LATIN}](?:[${LATIN}\\s'’.,!?&\\-]*[${LATIN}])?`, 'g');
+	// 歌词里的括号：作词者自带的注音「漢字（かな）」，或者和声、注释
+	const RE_INLINE_RUBY = new RegExp(`([${KANJI}]+)[（(]([ぁ-ゖァ-ヺー・]+)[）)]`, 'g');
+	const RE_PAREN = /[（(][^（）()]*[）)]/g;
 
 	function toHiragana(s) {
 		return s.replace(/[ァ-ヶ]/g, (c) =>
@@ -129,27 +135,35 @@
 		tsa: 'つぁ', tse: 'つぇ', tso: 'つぉ',
 	};
 	const ROMAJI_MAX = 3;
+	// 音译里认不出的拍；不在假名区，toKatakana / toHiragana 都不会动它
+	const UNKNOWN = '〓';
 
 	/**
-	 * 罗马字 → 平假名。认不出任何一个字符就返回 null，让调用方退回词典，
-	 * 宁可不用也不要给出错的读音。
+	 * 罗马字 → 平假名。认不出的拍（音译里夹着的英文单词、数字）换成占位符 UNKNOWN，
+	 * 连续的几个合成一个，由 segmentsFromReading 和原文里的英文/数字对上；
+	 * 一个假名都转不出来才返回 null。
 	 */
 	function romajiToKana(input) {
 		// 网易云的音译按拍用空格隔开，要逐拍转换：先拼起来的话 "ne n yo"（年よ）
 		// 变成 "nenyo"，会被贪婪匹配成 ne + nyo → ねにょ
 		let out = '';
+		let known = false;
 		// 拍内的 n' 同样是边界："re n'a i"（恋愛）里的 n'a 是 ん + あ
 		for (const syl of String(input).toLowerCase().split(/[\s　]+|(?<=n)['’]/)) {
 			const kana = sylToKana(syl);
-			if (kana == null) return null;
+			if (kana == null) {
+				if (!out.endsWith(UNKNOWN)) out += UNKNOWN;
+				continue;
+			}
+			if (kana) known = true;
 			out += kana;
 		}
-		return out || null;
+		return known ? out : null;
 	}
 
 	function sylToKana(syl) {
-		// 音译里可能带的标点
-		const s = syl.replace(/['’‘`,.!?;:"“”()[\]{}、。，！？…「」『』]/g, '');
+		// 标点、符号（～ ♪ 之类）在音译里没有读音；数字留着，转不出来会变成占位符
+		const s = syl.replace(/[^a-z0-9\-－ー]/g, '');
 		let out = '';
 		let i = 0;
 		while (i < s.length) {
@@ -181,7 +195,7 @@
 				i++;
 				continue;
 			}
-			return null; // 夹了英文单词之类，交给词典
+			return null; // 夹了英文单词之类
 		}
 		return out;
 	}
@@ -280,9 +294,13 @@
 	 * 把原文里的一段假名做成正则锚点。
 	 * 音译写的是读音：助词 は→wa、へ→e、を→o，还原成假名后和原文的字形对不上，
 	 * 所以这几个字要同时接受两种写法。标点和空格在音译里没有对应，直接去掉。
+	 * latin 为真时，原文里的英文/数字串对应音译里的占位符 UNKNOWN，两边允许夹着假名
+	 * ——英文里恰好像罗马字的部分（no、to、into）会被音译转成假名。
 	 */
-	function looseAnchorPattern(text) {
-		const kana = toKatakana(text).replace(/[^ァ-ヺーｰ]/g, '');
+	function looseAnchorPattern(text, latin) {
+		let src = toKatakana(text);
+		if (latin) src = src.replace(RE_LATIN_RUN, UNKNOWN);
+		const kana = src.replace(/[^ァ-ヺーｰ〓]/g, '');
 		if (!kana) return '';
 		return escapeRe(kana)
 			// 外来语的ディ/ティ，音译写 di/ti，转回来是ヂ/チ
@@ -296,7 +314,8 @@
 			.replace(/ヲ/g, '[ヲオ]')
 			.replace(/ヂ/g, '[ヂジ]')
 			.replace(/ヅ/g, '[ヅズ]')
-			.replace(/ー/g, '[ーｰアイウエオ]');
+			.replace(/ー/g, '[ーｰアイウエオ]')
+			.replace(/〓+/g, `[ァ-ヺーｰ${UNKNOWN}]*${UNKNOWN}[ァ-ヺーｰ${UNKNOWN}]*`);
 	}
 
 	/**
@@ -319,6 +338,15 @@
 					continue;
 				}
 				const part = parts[i];
+				if (part.full) {
+					// 长度不定的锚点（夹英文的），每种长度都试
+					for (let len = 0; p + len <= n; len++) {
+						if (best[i + 1][p + len] >= best[i][p] || !part.full.test(reading.substr(p, len))) continue;
+						best[i][p] = best[i + 1][p + len];
+						pick[i][p] = len;
+					}
+					continue;
+				}
 				if (part.re) {
 					part.re.lastIndex = p;
 					const m = part.re.exec(reading);
@@ -342,7 +370,7 @@
 		const out = [];
 		for (let i = 0, p = 0; i < parts.length; i++) {
 			const len = pick[i][p];
-			if (!parts[i].re) out.push(reading.substr(p, len));
+			if (!parts[i].re && !parts[i].full) out.push(reading.substr(p, len));
 			p += len;
 		}
 		return out;
@@ -427,17 +455,61 @@
 	 * 会被当成一个整体，整段读音糊在上面变成 `昨夜言(ゆうべい)`。所以结构取自词典
 	 * 分词结果（`昨夜` / `言`），再用词典读音的长度把音译片段切开。
 	 *
+	 * 依次尝试几种对法，第一个成功的为准：
+	 *   - 原文的英文/数字对音译里的占位符（音译里有占位符才试），不行再当作读不出的字
+	 *   - 括号里的内容算进音译；不行再整个跳过（音译常常不带和声那一段）
+	 *
 	 * @param {string} text          歌词原文
-	 * @param {string} reading       整行读音（假名）
+	 * @param {string} reading       整行读音（假名，可以带 UNKNOWN 占位符）
 	 * @param {Array}  dictSegments  tokensToSegments 的结果，只读
 	 */
 	function segmentsFromReading(text, reading, dictSegments, opts) {
 		opts = opts || {};
 		if (!RE_HAS_KANJI.test(text) || !dictSegments || !dictSegments.length) return null;
 		const kanaFn = opts.kana === 'katakana' ? toKatakana : toHiragana;
+		reading = toKatakana(reading);
 
+		// 作词者自带注音的括号已经是 hidden 片段，不算在内
+		const masked = dictSegments.map((s) => (s.hidden ? ' '.repeat(s.text.length) : s.text)).join('');
+		const parens = [...masked.matchAll(RE_PAREN)].map((m) => [m.index, m.index + m[0].length]);
+
+		for (const skipParen of parens.length ? [false, true] : [false]) {
+			for (const latin of reading.includes(UNKNOWN) ? [true, false] : [false]) {
+				const segs = fillFromReading(dictSegments, reading, skipParen ? parens : [], latin);
+				if (!segs) continue;
+				for (const s of segs) if (s.rt) s.rt = kanaFn(toKatakana(s.rt));
+				return segs;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * 复制片段并在 cuts 处切开，每片记下起始下标 start。
+	 * 带注音的片段是纯汉字，括号不会切到它们，所以只切不带注音的。
+	 */
+	function copySegments(segments, cuts) {
+		const out = [];
+		let pos = 0;
+		for (const s of segments) {
+			const start = pos;
+			pos += s.text.length;
+			const inner = s.rt || s.hidden ? [] : cuts.filter((c) => c > start && c < pos).sort((x, y) => x - y);
+			let from = start;
+			for (const c of [...new Set(inner), pos]) {
+				out.push(Object.assign({}, s, { text: s.text.slice(from - start, c - start), start: from }));
+				from = c;
+			}
+		}
+		return out;
+	}
+
+	function fillFromReading(dictSegments, reading, parens, latin) {
 		// 复制一份，别改到调用方缓存里的词典结果
-		const segs = dictSegments.map((s) => ({ text: s.text, rt: s.rt, at: s.at }));
+		const segs = copySegments(dictSegments, parens.flat());
+		for (const s of segs) s.skip = s.hidden || parens.some(([a, b]) => s.start >= a && s.start < b);
+		// 英文/数字对得上占位符时，只有汉字算读不出
+		const unreadableRe = latin ? RE_HAS_KANJI : RE_UNREADABLE;
 
 		// 用「非空锚点」把 segs 切成若干待填的空档。纯标点/空格锚点是空的，
 		// 并进相邻空档一起处理，而不是像行级对齐那样直接放弃。
@@ -447,14 +519,26 @@
 		let gap = null;
 		let nextBad = false;
 		const openGap = () => gap || (gap = { items: [], bad: nextBad });
+		const closeGap = () => {
+			if (gap) groups.push(gap);
+			gap = null;
+		};
 		for (const seg of segs) {
+			if (seg.skip) continue;
+			if (seg.fixed) {
+				// 作词者自带的注音：当锚点，不改
+				closeGap();
+				groups.push({ anchor: looseAnchorPattern(seg.rt) });
+				nextBad = false;
+				continue;
+			}
 			if (seg.rt) {
 				openGap().items.push(seg);
 				nextBad = false;
 				continue;
 			}
-			const unreadable = RE_UNREADABLE.test(seg.text);
-			const anchor = looseAnchorPattern(seg.text);
+			const unreadable = unreadableRe.test(seg.text);
+			const anchor = looseAnchorPattern(seg.text, latin);
 			if (!anchor) {
 				if (unreadable) openGap().bad = true;
 				if (gap) gap.items.push(seg);
@@ -464,13 +548,10 @@
 			// 在后面的落进后一个
 			const kanaAt = seg.text.search(RE_HAS_KANA_OR_LONG);
 			const kanaEnd = seg.text.length - [...seg.text].reverse().join('').search(RE_HAS_KANA_OR_LONG);
-			if (unreadable && RE_UNREADABLE.test(seg.text.slice(0, kanaAt))) openGap().bad = true;
-			if (gap) {
-				groups.push(gap);
-				gap = null;
-			}
+			if (unreadable && unreadableRe.test(seg.text.slice(0, kanaAt))) openGap().bad = true;
+			closeGap();
 			groups.push({ anchor });
-			nextBad = unreadable && RE_UNREADABLE.test(seg.text.slice(kanaEnd));
+			nextBad = unreadable && unreadableRe.test(seg.text.slice(kanaEnd));
 		}
 		if (gap) groups.push(gap);
 		else if (nextBad) groups.push({ items: [], bad: true });
@@ -479,7 +560,12 @@
 		const gaps = [];
 		for (const g of groups) {
 			if (g.anchor != null) {
-				parts.push({ re: new RegExp(g.anchor, 'y') });
+				// 带占位符的锚点长度不定：英文里恰好像罗马字的部分（no、to、into）会被转成假名
+				parts.push(
+					g.anchor.includes(UNKNOWN)
+						? { full: new RegExp(`^(?:${g.anchor})$`) }
+						: { re: new RegExp(g.anchor, 'y') }
+				);
 				continue;
 			}
 			if (!g.bad && !g.items.some((it) => it.rt)) continue; // 只有标点，不占读音
@@ -488,12 +574,13 @@
 		}
 		if (!gaps.length) return null;
 
-		const captures = splitReading(parts, toKatakana(reading));
+		const captures = splitReading(parts, reading);
 		if (!captures) return null;
 
 		let usedOfficial = false;
 		gaps.forEach((g, i) => {
-			if (g.bad) return;
+			// 分到占位符的空档说明英文/数字没对上，这段读音不可信
+			if (g.bad || captures[i].includes(UNKNOWN)) return;
 			const items = g.items.filter((it) => it.rt);
 			const readings = distributeReading(items, captures[i]);
 			if (!readings) return; // 分不开，这一段保留词典读音
@@ -505,8 +592,19 @@
 		});
 		if (!usedOfficial) return null; // 一段都没用上，结果等同词典
 
-		for (const s of segs) if (s.rt) s.rt = kanaFn(toKatakana(s.rt));
-		return segs;
+		return segs.map(stripSegment);
+	}
+
+	/** 去掉内部用的字段，只留对外的 text / rt / at / fixed / hidden */
+	function stripSegment(s) {
+		const out = { text: s.text };
+		if (s.rt) {
+			out.rt = s.rt;
+			out.at = s.at;
+		}
+		if (s.fixed) out.fixed = true;
+		if (s.hidden) out.hidden = true;
+		return out;
 	}
 
 	// ---------------------------------------------------------------- 词典修正
@@ -537,6 +635,31 @@
 		瞬間: 'しゅんかん',
 		二度: 'にど',
 		一度: 'いちど',
+		// 以下取自 800 多首歌的官方音译统计，歌词里几乎总是这么读
+		今: 'いま',
+		風: 'かぜ',
+		心: 'こころ',
+		音: 'おと',
+		土: 'つち',
+		他: 'ほか',
+		術: 'すべ',
+		如何: 'どう',
+		宝物: 'たからもの',
+		細工: 'さいく',
+		未來: 'みらい',
+		正しく: 'ただしく',
+		逝く: 'いく',
+		歪む: 'ゆがむ',
+		歪ん: 'ゆがん',
+		居ら: 'いら',
+		参ろう: 'まいろう',
+	};
+
+	// IPADIC 把送假名切错时，单字被当成名词给了音读（失くした → 失/くし/た → シツ），
+	// 看后面紧跟的假名定读音。片假名送假名（回レ）也算
+	const NEXT_KANA_READINGS = {
+		失: [/^[くク]/, 'ナ'],
+		回: [/^[っッるルりリれレろロらラ]/, 'マワ'],
 	};
 
 	// 数字 + 助数词。IPADIC 常给出单字的训读（10月 → つき），这里按量词纠正。
@@ -618,6 +741,18 @@
 
 			const tk = tokens[i];
 			const prev = tokens[i - 1];
+			const next = tokens[i + 1];
+
+			const nk = NEXT_KANA_READINGS[tk.surface_form];
+			if (nk && next && nk[0].test(next.surface_form)) {
+				out.push({ surface_form: tk.surface_form, reading: nk[1] });
+				continue;
+			}
+			// 「君」只有接在人名后面才是くん，其余都读きみ
+			if (tk.surface_form === '君' && !(prev && prev.pos === '名詞' && prev.pos_detail_1 === '固有名詞')) {
+				out.push({ surface_form: '君', reading: 'キミ' });
+				continue;
+			}
 			// 「二十日」会被切成 二 / 十 / 日，往前把连续的数词都收上来
 			let numText = '';
 			for (let j = i - 1; j >= 0 && RE_NUMBER.test(tokens[j].surface_form); j--)
@@ -719,6 +854,37 @@
 			}
 		}
 
+		return applyInlineRuby(out, kana);
+	}
+
+	/**
+	 * 作词者自己写的注音「漢字（かな）」：括号前的整段汉字直接用括号里的读音（fixed），
+	 * 括号本身留在片段里但标成 hidden，渲染时藏起来——片段拼起来仍然等于原文，
+	 * 逐字歌词按下标切分不受影响。
+	 */
+	function applyInlineRuby(segs, kanaFn) {
+		const text = segs.map((s) => s.text).join('');
+		const rubies = [...text.matchAll(RE_INLINE_RUBY)].map((m) => ({
+			from: m.index,
+			mid: m.index + m[1].length,
+			to: m.index + m[0].length,
+			rt: m[2].replace(/・/g, ''),
+		}));
+		if (!rubies.length) return segs;
+
+		const out = [];
+		for (const p of copySegments(segs, rubies.flatMap((r) => [r.from, r.mid, r.to]))) {
+			const r = rubies.find((x) => p.start >= x.from && p.start < x.to);
+			if (!r) {
+				const last = out[out.length - 1];
+				if (!p.rt && last && !last.rt && !last.hidden) last.text += p.text;
+				else out.push(stripSegment(p));
+			} else if (p.start === r.from) {
+				out.push({ text: text.slice(r.from, r.mid), rt: kanaFn(toKatakana(r.rt)), at: r.from, fixed: true });
+			} else if (p.start === r.mid) {
+				out.push({ text: text.slice(r.mid, r.to), hidden: true });
+			}
+		}
 		return out;
 	}
 
@@ -733,6 +899,7 @@
 		mergeOverrides,
 		tokensToSegments,
 		romajiToKana,
+		UNKNOWN,
 		segmentsFromReading,
 		parseLrc,
 		lyricKey,
