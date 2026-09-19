@@ -29,7 +29,8 @@
 	const LATIN = 'A-Za-z0-9Ａ-Ｚａ-ｚ０-９';
 	const RE_LATIN_RUN = new RegExp(`[${LATIN}](?:[${LATIN}\\s'’.,!?&\\-]*[${LATIN}])?`, 'g');
 	// 歌词里的括号：作词者自带的注音「漢字（かな）」，或者和声、注释
-	const RE_INLINE_RUBY = new RegExp(`([${KANJI}]+)[（(]([ぁ-ゖァ-ヺー・]+)[）)]`, 'g');
+	// 底字可以带前导数字：「10年後(じゅうねんご)」
+	const RE_INLINE_RUBY = new RegExp(`([0-9０-９]*[${KANJI}]+)[（(]([ぁ-ゖァ-ヺー・]+)[）)]`, 'g');
 	const RE_PAREN = /[（(][^（）()]*[）)]/g;
 
 	function toHiragana(s) {
@@ -442,6 +443,12 @@
 	function plausibleOfficial(text, dict, official) {
 		if (OFFICIAL_REJECT[text] === official) return false;
 		if (official === dict) return true;
+		// 数 + 助数词：机器音译常把助数词读成训读（9人 → きゅうひと），结尾对不上助数词的就不要
+		const counter = RE_NUMBER.test(text.slice(0, -1)) && COUNTERS[text.slice(-1)];
+		if (counter) {
+			const ends = [dict, counter.r, counter.p, counter.n, ...Object.values(counter.whole || {})];
+			if (!ends.some((r) => r && r.slice(-1) === official.slice(-1))) return false;
+		}
 		const repeated =
 			official.length >= dict.length * 2 && (official.startsWith(dict) || official.endsWith(dict));
 		return !repeated;
@@ -506,7 +513,19 @@
 
 	function fillFromReading(dictSegments, reading, parens, latin) {
 		// 复制一份，别改到调用方缓存里的词典结果
-		const segs = copySegments(dictSegments, parens.flat());
+		let segs = copySegments(dictSegments, parens.flat());
+		// 音译把数字原样留着（10匹 → 10 ppi ki）时，「10匹」拆回 数字 / 助数词：
+		// 数字去对占位符，助数词照常进空档。对完再合回去，读音用词典的
+		if (latin) {
+			segs = segs.flatMap((s) =>
+				s.num && !s.skip
+					? [
+							{ text: s.text.slice(0, s.num.len), start: s.start, numHead: s },
+							{ text: s.text.slice(s.num.len), rt: s.num.rt, start: s.start + s.num.len, numTail: true },
+					  ]
+					: [s]
+			);
+		}
 		for (const s of segs) s.skip = s.hidden || parens.some(([a, b]) => s.start >= a && s.start < b);
 		// 英文/数字对得上占位符时，只有汉字算读不出
 		const unreadableRe = latin ? RE_HAS_KANJI : RE_UNREADABLE;
@@ -592,7 +611,7 @@
 		});
 		if (!usedOfficial) return null; // 一段都没用上，结果等同词典
 
-		return segs.map(stripSegment);
+		return segs.filter((s) => !s.numTail).map((s) => stripSegment(s.numHead || s));
 	}
 
 	/** 去掉内部用的字段，只留对外的 text / rt / at / fixed / hidden */
@@ -604,6 +623,7 @@
 		}
 		if (s.fixed) out.fixed = true;
 		if (s.hidden) out.hidden = true;
+		if (s.num) out.num = s.num;
 		return out;
 	}
 
@@ -612,18 +632,14 @@
 	// kuromoji + IPADIC 常见的读音错误，按「表层形」整体覆盖。
 	// 键可以跨多个 token（比如「二人」会被切成 二 / 人），合并逻辑见 mergeOverrides。
 	const OVERRIDES = {
-		一人: 'ひとり',
-		二人: 'ふたり',
 		大人: 'おとな',
 		今日: 'きょう',
 		明日: 'あした',
 		昨日: 'きのう',
 		今朝: 'けさ',
 		一体: 'いったい',
-		一日: 'いちにち',
-		四時: 'よじ',
-		七時: 'しちじ',
-		九時: 'くじ',
+		十分: 'じゅうぶん',
+		万人: 'ばんにん',
 		行方: 'ゆくえ',
 		景色: 'けしき',
 		上手: 'じょうず',
@@ -633,8 +649,6 @@
 		刹那: 'せつな',
 		黄昏: 'たそがれ',
 		瞬間: 'しゅんかん',
-		二度: 'にど',
-		一度: 'いちど',
 		// 以下取自 800 多首歌的官方音译统计，歌词里几乎总是这么读
 		今: 'いま',
 		風: 'かぜ',
@@ -662,60 +676,109 @@
 		回: [/^[っッるルりリれレろロらラ]/, 'マワ'],
 	};
 
-	// 数字 + 助数词。IPADIC 常给出单字的训读（10月 → つき），这里按量词纠正。
+	// 数字 + 助数词：整体注音（1人 → ひとり，3本 → さんぼん）。
+	//   r     助数词本身的读音
+	//   whole 整个数的特殊读法；only 为真时只认 whole 里的数（つ 只到 9）
+	//   last  个位数的特殊读法（4時 → よじ，14時 → じゅうよじ）
+	//   soku  数字末尾哪些读法促音化（いち → いっ）
+	//   p / n 促音后 / 撥音后助数词的变读（いっぽん / さんぼん）
+	const SOKU_K = ['イチ', 'ロク', 'ハチ', 'ジュウ', 'ヒャク'];
+	const SOKU_S = ['イチ', 'ハチ', 'ジュウ'];
 	const COUNTERS = {
-		月: 'がつ',
-		年: 'ねん',
-		時: 'じ',
-		分: 'ふん',
-		秒: 'びょう',
-		人: 'にん',
-		回: 'かい',
-		歳: 'さい',
-		才: 'さい',
-		番: 'ばん',
-		度: 'ど',
-		個: 'こ',
-		本: 'ほん',
-		枚: 'まい',
+		人: { r: 'ニン', whole: { 1: 'ヒトリ', 2: 'フタリ' }, last: { 4: 'ヨ', 7: 'シチ' } },
+		つ: { r: 'ツ', only: true, whole: { 1: 'ヒトツ', 2: 'フタツ', 3: 'ミッツ', 4: 'ヨッツ', 5: 'イツツ', 6: 'ムッツ', 7: 'ナナツ', 8: 'ヤッツ', 9: 'ココノツ' } },
+		// 「〜日」的读法太不规则，1〜10 等单独列
+		日: {
+			r: 'ニチ',
+			whole: { 1: 'イチニチ', 2: 'フツカ', 3: 'ミッカ', 4: 'ヨッカ', 5: 'イツカ', 6: 'ムイカ', 7: 'ナノカ', 8: 'ヨウカ', 9: 'ココノカ', 10: 'トオカ', 14: 'ジュウヨッカ', 20: 'ハツカ', 24: 'ニジュウヨッカ' },
+			last: { 7: 'シチ', 9: 'ク' },
+		},
+		月: { r: 'ガツ', last: { 4: 'シ', 7: 'シチ', 9: 'ク' } },
+		年: { r: 'ネン', last: { 4: 'ヨ' } },
+		時: { r: 'ジ', last: { 4: 'ヨ', 7: 'シチ', 9: 'ク' } },
+		分: { r: 'フン', soku: SOKU_K, p: 'プン', n: 'プン' },
+		秒: { r: 'ビョウ' },
+		回: { r: 'カイ', soku: SOKU_K },
+		階: { r: 'カイ', soku: SOKU_K, n: 'ガイ' },
+		個: { r: 'コ', soku: SOKU_K },
+		曲: { r: 'キョク', soku: SOKU_K },
+		歳: { r: 'サイ', soku: SOKU_S, whole: { 20: 'ハタチ' } },
+		才: { r: 'サイ', soku: SOKU_S, whole: { 20: 'ハタチ' } },
+		週: { r: 'シュウ', soku: SOKU_S },
+		本: { r: 'ホン', soku: SOKU_K, p: 'ポン', n: 'ボン' },
+		匹: { r: 'ヒキ', soku: SOKU_K, p: 'ピキ', n: 'ビキ' },
+		杯: { r: 'ハイ', soku: SOKU_K, p: 'パイ', n: 'バイ' },
+		番: { r: 'バン' },
+		度: { r: 'ド' },
+		枚: { r: 'マイ' },
+		倍: { r: 'バイ' },
+		円: { r: 'エン', last: { 4: 'ヨ' } },
 	};
 	const RE_NUMBER = /^[0-9０-９一二三四五六七八九十百千万〇零]+$/;
 
-	// 「〜日」的读法太不规则，单独列表
-	const DAY_READINGS = {
-		1: 'いちにち',
-		2: 'ふつか',
-		3: 'みっか',
-		4: 'よっか',
-		5: 'いつか',
-		6: 'むいか',
-		7: 'なのか',
-		8: 'ようか',
-		9: 'ここのか',
-		10: 'とおか',
-		14: 'じゅうよっか',
-		20: 'はつか',
-		24: 'にじゅうよっか',
-	};
+	const DIGIT_READINGS = ['', 'イチ', 'ニ', 'サン', 'ヨン', 'ゴ', 'ロク', 'ナナ', 'ハチ', 'キュウ'];
+	const THOUSANDS = { 1: 'セン', 3: 'サンゼン', 8: 'ハッセン' };
+	const HUNDREDS = { 1: 'ヒャク', 3: 'サンビャク', 6: 'ロッピャク', 8: 'ハッピャク' };
+
+	/** 0〜9999 的读音；last 是个位数的特殊读法 */
+	function readUnder10000(n, last) {
+		const t = Math.floor(n / 1000);
+		const h = Math.floor(n / 100) % 10;
+		const d = Math.floor(n / 10) % 10;
+		const o = n % 10;
+		let s = '';
+		if (t) s += THOUSANDS[t] || DIGIT_READINGS[t] + 'セン';
+		if (h) s += HUNDREDS[h] || DIGIT_READINGS[h] + 'ヒャク';
+		if (d) s += (d === 1 ? '' : DIGIT_READINGS[d]) + 'ジュウ';
+		if (o) s += (last && last[o]) || DIGIT_READINGS[o];
+		return s;
+	}
+
+	/** 数字的读音（片假名），超出一亿返回 null */
+	function readNumber(n, last) {
+		if (!(n >= 0) || n >= 1e8) return null;
+		if (n === 0) return 'レイ'; // 0時 → れいじ
+		const man = Math.floor(n / 10000);
+		return (man ? readUnder10000(man) + 'マン' : '') + readUnder10000(n % 10000, last);
+	}
+
+	/** 「数 + 助数词」整体的读音（片假名），不认识返回 null */
+	function counterReading(n, c) {
+		if (c.whole && c.whole[n]) return c.whole[n];
+		if (c.only) return null;
+		let num = readNumber(n, c.last);
+		if (!num) return null;
+		let r = c.r;
+		const end = (c.soku || []).find((e) => num.endsWith(e));
+		if (end) {
+			num = num.slice(0, -1) + 'ッ'; // イチ → イッ，ジュウ → ジュッ
+			if (c.p) r = c.p;
+		} else if (c.n && num.endsWith('ン')) r = c.n;
+		return num + r;
+	}
 
 	const KANJI_DIGITS = { 〇: 0, 零: 0, 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+	const KANJI_UNITS = { 十: 10, 百: 100, 千: 1000 };
 
-	/** 把「20」「２０」「二十」这类写法转成数字，认不出返回 NaN */
+	/** 把「20」「２０」「二十」「三百」「2万」这类写法转成数字，认不出返回 NaN */
 	function parseNum(s) {
-		const half = s.replace(/[０-９]/g, (c) =>
-			String.fromCharCode(c.charCodeAt(0) - 0xfee0)
-		);
+		const half = s.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
 		if (/^[0-9]+$/.test(half)) return parseInt(half, 10);
 		let total = 0;
+		let section = 0;
 		let cur = 0;
 		for (const ch of half) {
 			if (ch in KANJI_DIGITS) cur = cur * 10 + KANJI_DIGITS[ch];
-			else if (ch === '十') {
-				total += (cur || 1) * 10;
+			else if (ch >= '0' && ch <= '9') cur = cur * 10 + (ch.charCodeAt(0) - 48); // 「2万」
+			else if (ch in KANJI_UNITS) {
+				section += (cur || 1) * KANJI_UNITS[ch];
 				cur = 0;
+			} else if (ch === '万') {
+				total += (section + cur || 1) * 10000;
+				section = cur = 0;
 			} else return NaN;
 		}
-		return total + cur;
+		return total + section + cur;
 	}
 
 	/**
@@ -727,7 +790,9 @@
 		const MAX = 4;
 		for (let i = 0; i < tokens.length; i++) {
 			let matched = false;
-			for (let n = Math.min(MAX, tokens.length - i); n >= 2; n--) {
+			// 「三十一人」的 一人 不是 ひとり，前面还有数字时不整体覆盖数字开头的词
+			const midNumber = i > 0 && RE_NUMBER.test(tokens[i - 1].surface_form) && RE_NUMBER.test(tokens[i].surface_form);
+			for (let n = Math.min(MAX, tokens.length - i); n >= 2 && !midNumber; n--) {
 				const slice = tokens.slice(i, i + n);
 				const joined = slice.map((t) => t.surface_form).join('');
 				if (OVERRIDES[joined]) {
@@ -753,25 +818,20 @@
 				out.push({ surface_form: '君', reading: 'キミ' });
 				continue;
 			}
-			// 「二十日」会被切成 二 / 十 / 日，往前把连续的数词都收上来
-			let numText = '';
-			for (let j = i - 1; j >= 0 && RE_NUMBER.test(tokens[j].surface_form); j--)
-				numText = tokens[j].surface_form + numText;
-			const afterNumber = numText !== '';
-
-			if (tk.surface_form === '日' && afterNumber) {
-				const day = DAY_READINGS[parseNum(numText)];
-				out.push({
-					surface_form: '日',
-					reading: toKatakana(day || 'にち'),
-				});
-				continue;
-			}
-			if (COUNTERS[tk.surface_form] && afterNumber) {
-				out.push({
-					surface_form: tk.surface_form,
-					reading: toKatakana(COUNTERS[tk.surface_form]),
-				});
+			// 数字 + 助数词整体注音。「二十日」会被切成 二 / 十 / 日，往前把连续的数词都收上来
+			const counter = COUNTERS[tk.surface_form];
+			let k = out.length;
+			while (k > 0 && !out[k - 1].number && RE_NUMBER.test(out[k - 1].surface_form)) k--;
+			if (counter && k < out.length) {
+				const numText = out.slice(k).map((t) => t.surface_form).join('');
+				const reading = counterReading(parseNum(numText), counter);
+				if (reading) {
+					out.splice(k);
+					out.push({ surface_form: numText + tk.surface_form, reading, number: counter.r, digits: numText });
+				} else if (RE_HAS_KANJI.test(tk.surface_form)) {
+					// 数认不出来（太大、写法怪），至少助数词本身读对
+					out.push({ surface_form: tk.surface_form, reading: counter.r });
+				} else out.push(tk);
 				continue;
 			}
 			// 「オレンジ色」这类外来语 + 色，IPADIC 会给 ショク
@@ -800,7 +860,7 @@
 		const out = [];
 		let offset = 0;
 
-		const push = (text, rt, at) => {
+		const push = (text, rt, at, num) => {
 			if (!text) return;
 			if (!rt) {
 				const last = out[out.length - 1];
@@ -808,7 +868,9 @@
 				else out.push({ text: text });
 				return;
 			}
-			out.push({ text: text, rt: rt, at: at });
+			const seg = { text: text, rt: rt, at: at };
+			if (num) seg.num = num;
+			out.push(seg);
 		};
 
 		for (const token of mergeOverrides(tokens)) {
@@ -816,6 +878,13 @@
 			const start = offset;
 			offset += surface.length;
 
+			// 「1人」「1つ」：数字和助数词合在一起注音，底字里可以没有汉字
+			if (token.number) {
+				// 阿拉伯数字的长度记下来：音译有时把数字原样留着，对齐时要拆开（见 fillFromReading）
+				const digits = /^[0-9０-９]+$/.test(token.digits) ? token.digits.length : 0;
+				push(surface, kana(token.reading), start, digits && { len: digits, rt: kana(token.number) });
+				continue;
+			}
 			if (!RE_HAS_KANJI.test(surface)) {
 				push(surface);
 				continue;
@@ -864,12 +933,21 @@
 	 */
 	function applyInlineRuby(segs, kanaFn) {
 		const text = segs.map((s) => s.text).join('');
-		const rubies = [...text.matchAll(RE_INLINE_RUBY)].map((m) => ({
-			from: m.index,
-			mid: m.index + m[1].length,
-			to: m.index + m[0].length,
-			rt: m[2].replace(/・/g, ''),
-		}));
+		// 带注音的片段内部不能切（copySegments 只切不带注音的），落在里面的括号注音就不认了
+		const inside = new Set();
+		let pos = 0;
+		for (const s of segs) {
+			if (s.rt) for (let i = pos + 1; i < pos + s.text.length; i++) inside.add(i);
+			pos += s.text.length;
+		}
+		const rubies = [...text.matchAll(RE_INLINE_RUBY)]
+			.map((m) => ({
+				from: m.index,
+				mid: m.index + m[1].length,
+				to: m.index + m[0].length,
+				rt: m[2].replace(/・/g, ''),
+			}))
+			.filter((r) => !inside.has(r.from) && !inside.has(r.mid) && !inside.has(r.to));
 		if (!rubies.length) return segs;
 
 		const out = [];
