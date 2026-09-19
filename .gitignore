@@ -21,3 +21,6 @@ debug.log
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# JetBrains IDE 配置
+.idea/
