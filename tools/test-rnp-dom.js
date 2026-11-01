@@ -30,6 +30,8 @@ const LINES = [
 	['いつ', 'まで', 'も', 'あなた', 'は', 'ここ', 'に', 'いる'], // 没汉字，应当不动
 	['まだ', '最', '初', 'は'], // yrc 常把汉字一字一切，「最初」的读音跨了两个 span
 	['宇宙', '(そら)', 'を', '見る'], // 作词者自带注音：括号藏起来，读音挂到汉字上
+	['二', '人', 'が', '出', '會', 'っ', 'た', '日'], // 用户截图：旧字跨逐字宿主
+	['凜', 'と', '戀', '人', 'を', '射', 'ち', '墮', 'と', 'す'],
 ];
 const TRANS = [
 	'哪怕有时我们伤害了彼此',
@@ -195,6 +197,10 @@ function check(ok, label, detail) {
 		const rt = [...karaoke[i].querySelectorAll('.fg-rt')].map((r) => r.textContent);
 		check(rt.length > 0, `第 ${i + 1} 行注上了音`, `rt=[${rt.join(' ')}]`);
 		check(perWord(karaoke[i]), `第 ${i + 1} 行注音分发到了每个词（逐字动画不受影响）`);
+	}
+	for (const [index, word, reading] of [[6, '出會', 'であ'], [7, '凜', 'りん'], [7, '戀人', 'こいびと'], [7, '墮', 'お']]) {
+		const holders = [...karaoke[index].querySelectorAll('.fg-ruby')];
+		check(holders.some(h => baseText(h) === word && h.querySelector('.fg-rt').textContent === reading), `旧字逐字注音 ${word} → ${reading}`);
 	}
 	check(
 		karaoke[3].querySelectorAll('.fg-rt').length === 0,

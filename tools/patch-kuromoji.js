@@ -1,7 +1,7 @@
 // 把 npm 上的 kuromoji 浏览器构建改造成适合 BetterNCM 插件环境的版本。
 // 用法: node tools/patch-kuromoji.js <kuromoji.js 源文件> <输出文件>
 //
-// 改了三处：
+// 修改项（独立版采用专属全局标识）：
 //   1. UMD 头部：网易云页面里存在 AMD 的 define，原始头部会把模块注册给 define
 //      而不是挂到 window 上，这里强制挂到 window.kuromoji。
 //   2. path.join：browserify 的 path.join 会把 "http://a" 规范化成 "http:/a"，

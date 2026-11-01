@@ -97,8 +97,8 @@ const CASES = [
 	// 拗音被拆成两拍写，小写假名从词典补回
 	['昼夜逆転', 'chu u ya gi ya ku te n', '昼夜(ちゅうや)逆転(ぎゃくてん)'],
 
-	// 词典读不出的简体字 / 英文也占读音：挨着它的空档留词典读音，其余照用音译
-	['荷物を背负った', 'ni mo tsu wo se o tta', '荷物(にもつ)を背(せ)负った'],
+	// 未知汉字由音译补读音；连续汉字段整体注音，不臆测内部边界。英文仍保守回退。
+	['荷物を背负った', 'ni mo tsu wo se o tta', '荷物(にもつ)を背负(せお)った'],
 	['One more 季節よ', 'o ne mo re ki se tsu yo', null],
 
 	// 重复演唱，音译多出一截：不能整段糊到一个字上
@@ -194,7 +194,7 @@ kuromoji
 		if (err) throw err;
 		let fail = 0;
 		for (const [text, romaji, expect] of CASES) {
-			const dictSegs = core.tokensToSegments(tokenizer.tokenize(text), { kana: 'hiragana' });
+			const dictSegs = core.tokensToSegments(core.tokenizeForReading(tokenizer, text), { kana: 'hiragana' });
 			const kana = romaji == null ? null : core.romajiToKana(romaji);
 			const segs = kana
 				? core.segmentsFromReading(text, kana, dictSegs, { kana: 'hiragana' })

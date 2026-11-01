@@ -1,0 +1,11 @@
+'use strict';
+const assert=require('node:assert/strict'),core=require('../src/furigana.js');
+const yrc='{"c":[{"tx":"あおい"}]}\n[1000,1200](1000,600,0)空(1600,600,0)を みる\n[3000,800](3000,800,0)Stay with me';
+assert.deepEqual(core.parseYrc(yrc),[{time:1000,text:'空をみる'},{time:3000,text:'Staywithme'}]);
+assert.deepEqual(core.parseYrc('invalid\n[0,10]missing word times'),[]);
+assert.deepEqual(core.clientOriginalLines({resourceTrackId:'old',lyricLines:[{time:1,lyric:'空をみる'}]},'new'),[],'Previous-song originals cannot authorize a fetch');
+const client={resourceTrackId:'1',lyricLines:[{time:3,lyric:'Stay with me'},{time:1,lyric:'空をみる'},{time:'bad',lyric:'あした'}],tlyricLines:[{time:0,lyric:'あしたへ'}]};
+assert.deepEqual(core.clientOriginalLines(client,'1'),[{time:1000,text:'空をみる'},{time:3000,text:'Stay with me'}]);
+assert.equal(core.hasJapaneseLyrics(core.clientOriginalLines({...client,lyricLines:[{time:1,lyric:'Stay with me'}]},'1')),false,'Translation text is excluded');
+assert.deepEqual(core.clientOriginalLines({resourceTrackId:'1',yrcInfo:{yrc}},'1'),core.parseYrc(yrc));
+console.log('Original lyric data passed: pure YRC parsing, stable time/order, same-song validation, translation exclusion and client fallback without desktop code.');

@@ -1,0 +1,100 @@
+'use strict';
+const assert = require('node:assert/strict');
+const { JSDOM } = require('jsdom');
+const core = require('../src/external-core.js');
+const { create } = require('../src/external.js');
+const documentFor = html => new JSDOM(html).window.document;
+const track = { title: '星の手紙', artists: ['試験歌手'] };
+const search = `<table class="searchResult"><tr><td class="searchResult__title"><a href="/lyric/test001/">星の手紙</a></td><td class="searchResult__artist"><p><a>試験歌手</a></p></td></tr></table>`;
+const song = `<h2 class="newLyricTitle__main">星の手紙<span>歌詞</span></h2><h3><a href="/artist/lyric/1">試験歌手</a></h3><div class="lyricBody"><div class="hiragana"><span class="ruby"><span class="rb">恋人</span><span class="rt">あなた</span></span>と<span class="ruby"><span class="rb">空</span><span class="rt">そら</span></span>をみる<br><span class="ruby"><span class="rb">星</span><span class="rt">ほし</span></span>への<span class="ruby"><span class="rb">手紙</span><span class="rt">てがみ</span></span></div><div class="romaji">must not parse twice</div></div><script>throw 'never execute';</script>`;
+const parsed = core.parseUtaten(documentFor(song), 'https://utaten.com/lyric/test001/');
+const record = { schema: 1, songId: '1', ...parsed };
+const groups = core.prepare(record);
+assert(core.validRecord(record, '1'));
+assert(!core.validRecord(record, '2'));
+assert.equal(core.searchResults(documentFor(search), 'utaten').length, 1);
+assert(core.matches(parsed, track));
+assert(!core.matches(parsed, { ...track, artists: ['別の人'] }));
+assert.equal(core.titleKey('know me…(TVアニメ「架空」主題歌)'), core.titleKey('know me...'));
+const changed = core.segmentsFor('戀人と空をみる！', groups, 'katakana');
+assert.equal(changed.map(s => s.text).join(''), '戀人と空をみる！');
+assert.deepEqual(changed.filter(s => s.rt).map(s => [s.text, s.rt]), [['戀人', 'アナタ'], ['空', 'ソラ']]);
+assert.equal(core.segmentsFor('別の歌をうたう', groups, 'hiragana'), null);
+assert.equal(core.segmentsFor('戀人と空をみる 星への手紙', groups, 'hiragana').map(s => s.text).join(''), '戀人と空をみる 星への手紙');
+assert(core.segmentsFor('戀人と空をみる', core.prepare({ provider: 'utaten', lines: [{ text: '恋人と空をみる夜です', segments: [...parsed.lines[0].segments, { text: '夜です' }] }] }), 'hiragana'));
+assert.equal(core.segmentsFor('星への手', groups, 'hiragana'), null, 'Do not truncate a ruby word');
+const other = structuredClone(record); other.lines.push({ text: parsed.lines[0].text, segments: parsed.lines[0].segments.map(s => s.text === '恋人' ? { text: s.text, rt: 'こいびと' } : s) });
+assert.equal(core.segmentsFor('恋人と空をみる', core.prepare(other), 'hiragana'), null, 'Ambiguous repeated lines must fall back');
+assert(!core.allowedURL('https://utaten.com.evil.test/'));
+assert(!core.allowedURL('https://user@utaten.com/'));
+assert(!core.allowedURL('file:///C:/secret'));
+const utaSearch = '<table><tr><td><a href="/song/12/"><span class="songlist-title">星の手紙</span></a></td><td><a href="/artist/1/">試験歌手</a></td></tr></table>';
+const candidate = core.searchResults(documentFor(utaSearch), 'utanet')[0];
+assert(core.matches(candidate, track));
+const utaSong = '<h1><span>星の手紙(hoshinotegami)</span><span class="artist-name">試験歌手</span></h1><div id="kashi-area">星への手紙<br>空をみる</div><div id="kashi-area-roma">hoshi he no tegami<br>sora wo miru</div>';
+const uta = core.parseUtanet(documentFor(utaSong), 'https://www.uta-net.com/global/en/lyric/12/', candidate);
+assert.equal(uta.lines.length, 2);
+assert.throws(() => core.parseUtanet(documentFor(utaSong.replace('hoshi he no tegami<br>', '')), candidate.url, candidate));
+let calls = [];
+const result = core.segmentsFor('星への手紙', core.prepare(uta), 'hiragana', (text, roma) => { calls.push(roma); return [{ text, rt: 'ほしへのてがみ' }]; });
+assert.equal(result[0].text, '星への手紙'); assert.deepEqual(calls, ['hoshi he no tegami']);
+
+function fixture(request) {
+	const files = new Map(); let ready = 0, metadata = 0;
+	const client = create({
+		dataRoot: async () => 'C:/BetterNCM',
+		fs: { mkdir: async () => true, exists: async p => files.has(p), readFileText: async p => files.get(p), writeFileText: async (p, v) => { files.set(p, v); return true; } },
+		parse: documentFor, request, onReady: () => ready++,
+	});
+	return { files, client, ready: () => ready, metadata: () => { metadata++; return Promise.resolve(track); }, metadataCount: () => metadata };
+}
+const settings = { externalProvider: 'auto' };
+(async () => {
+	let requests = 0;
+	const a = fixture(async url => { requests++; return url.includes('/search') ? search : song; });
+	await a.client.load('1', a.metadata, settings);
+	assert.equal(requests, 2); assert.equal(a.ready(), 1);
+	assert(a.client.segments('戀人と空をみる', 'hiragana'));
+	assert(a.files.has('C:/BetterNCM/lyrics/jp-furigana/1.json'));
+	const persisted = JSON.parse([...a.files.values()][0]);
+	assert.equal(persisted.provider, 'utaten'); assert(!JSON.stringify(persisted).includes('<script>'));
+	await a.client.load('1', a.metadata, settings);
+	assert.equal(requests, 2, 'Cache hits must not contact websites'); assert.equal(a.metadataCount(), 1, 'Cache hits need no metadata API');
+	await a.client.load('1', a.metadata, settings, true);
+	assert.equal(requests, 4, 'Manual refresh must refetch');
+	a.files.set('C:/BetterNCM/lyrics/jp-furigana/1.json', '{truncated');
+	await a.client.load('1', a.metadata, settings); assert.equal(requests, 6);
+	await a.client.load('2', a.metadata, { ...settings, externalCacheDir: 'D:/My Lyrics' });
+	assert(a.files.has('D:/My Lyrics/2.json')); assert(a.files.has('C:/BetterNCM/lyrics/jp-furigana/1.json'));
+	let release;
+	const wait = new Promise(resolve => { release = resolve; });
+	let n = 0;
+	const b = fixture(async url => { n++; if (n === 1) await wait; return url.includes('/search') ? search : song; });
+	const old = b.client.load('10', b.metadata, settings);
+	while (n === 0) await new Promise(resolve => setTimeout(resolve, 1));
+	await b.client.load('11', b.metadata, settings); release(); await old;
+	assert.equal(b.client.inspect().songId, '11'); assert.equal(b.ready(), 1);
+	assert(!b.files.has('C:/BetterNCM/lyrics/jp-furigana/10.json'));
+	b.client.stop(); assert.equal(b.client.segments('恋人と空をみる', 'hiragana'), null);
+	let attempts = [];
+	const c = fixture(async url => {
+		attempts.push(url);
+		if (url.includes('utaten.com')) throw new Error('HTTP 403');
+		return url.includes('/search') ? utaSearch : utaSong;
+	});
+	await c.client.load('1', c.metadata, settings);
+	assert.equal(c.client.inspect().source, 'utanet'); assert.equal(attempts.length, 3);
+	attempts = [];
+	await c.client.load('1', c.metadata, { ...settings, externalProvider: 'utaten' });
+	assert.equal(c.client.inspect().source, '', 'UtaTen-only must reject a cached Uta-Net record');
+	assert.equal(c.client.segments('星への手紙', 'hiragana'), null);
+	assert.equal(attempts.length, 1, 'UtaTen-only must not fall through to Uta-Net on error');
+	assert.equal(new URL(attempts[0]).hostname, 'utaten.com');
+	const d = fixture(async () => { throw new Error('HTTP 403'); });
+	await d.client.load('1', d.metadata, settings);
+	assert.equal(d.ready(), 0); assert.equal(d.files.size, 0); assert(d.client.inspect().status.includes('继续使用网易云'));
+	const bad = fixture(async () => search.replace('試験歌手', '別の歌手'));
+	await bad.client.load('1', bad.metadata, { ...settings, externalProvider: 'utaten' });
+	assert.equal(bad.files.size, 0); assert.equal(bad.ready(), 0);
+	console.log('External tests passed: parsers, preserved text, variant glyphs, split/merged lines, ambiguity, URL validation, cache/refresh/path, cancellation, fallback and wrong-song rejection.');
+})().catch(e => { console.error(e); process.exitCode = 1; });

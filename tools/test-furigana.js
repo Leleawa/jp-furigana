@@ -41,7 +41,7 @@ kuromoji
 		if (err) throw err;
 		let fail = 0;
 		for (const line of LINES) {
-			const tokens = tokenizer.tokenize(line);
+			const tokens = core.tokenizeForReading(tokenizer, line);
 			const segs = core.tokensToSegments(tokens);
 			// 断言：片段拼起来必须等于原文，不能丢字或加字
 			const joined = segs.map((s) => s.text).join('');

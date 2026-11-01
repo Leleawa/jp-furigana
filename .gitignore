@@ -24,3 +24,11 @@ desktop.ini
 
 # JetBrains IDE 配置
 .idea/
+
+# Local artifacts and private site/cache/proxy data; never publish whole-song fixtures.
+outputs/
+lyrics/
+requests/
+work/
+tests/private/
+*.local.json

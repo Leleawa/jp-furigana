@@ -6,106 +6,89 @@ on:
   pull_request:
   workflow_dispatch:
 
-# 检查 + 打包；main 上如果 manifest 里的版本还没发过 release，就自动发一个
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write # 建 release 用
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # release 说明要按 tag 取提交历史，浅克隆不够
-
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-
+          cache: npm
       - name: 语法检查
         run: |
-          for f in src/main.js src/furigana.js src/kuromoji.js tools/*.js; do
-            echo "checking $f"
+          for f in src/*.js tools/*.js tools/*.cjs tests/*.cjs; do
             node --check "$f"
           done
-
-      - name: manifest.json 合法性
-        run: node -e "const m=require('./src/manifest.json'); if(m.manifest_version!==1) throw new Error('manifest_version 不是 1'); console.log('v'+m.version, m.slug)"
-
-      # BetterNCM 商店按 subpath=/src 直接分发 src/，这些是上架准则要求的
-      - name: 上架准则检查
-        run: |
-          node -e "
-          const fs=require('fs');
-          const m=JSON.parse(fs.readFileSync('src/manifest.json','utf8'));
-          for (const k of ['name','slug','version','author','description','preview','betterncm_version']) {
-            if (!m[k]) throw new Error('manifest 缺 '+k);
-          }
-          if (!fs.existsSync('src/'+m.preview)) throw new Error('预览图不存在: '+m.preview);
-          const kb = fs.statSync('src/'+m.preview).size/1024;
-          if (kb > 200) throw new Error('预览图 '+kb.toFixed(0)+' KB, 准则要求压缩');
-          const s = fs.readFileSync('src/main.js','utf8');
-          if (!s.includes('betterncm.ncm.openUrl')) throw new Error('设置页缺少用 openUrl 打开的仓库/反馈链接');
-          console.log('预览图 '+kb.toFixed(0)+' KB, 元信息与外链检查通过');
-          "
-
-      - name: 注音逻辑 (词典)
-        run: node tools/test-furigana.js
-
-      - name: 注音逻辑 (官方音译对齐 + 2.x nbsp)
-        run: node tools/test-romaji.js
-
-      # fixture 含整首歌词没有入库，这一步在 CI 上会自动 SKIP
-      - name: 接口链路 (缺 fixture 则跳过)
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: 元信息与分发检查
+        run: npm run check:store
+      - name: 注音、外部网站、纠音、编辑与缓存回归
+        run: npm test
+      - name: 接口链路（私有 fixture 缺失则跳过）
         run: node tools/test-api-romaji.js
-
-      # RefinedNowPlaying 的逐字歌词 DOM，用 jsdom 模拟着跑一遍
-      - name: 第三方歌词插件兼容 (RNP / LyricBar 逐字)
+      - name: RNP / LyricBar 逐字兼容
         run: |
-          npm i jsdom --no-save --silent
           node tools/test-rnp-dom.js
           node tools/test-rnp-dom.js slide
           node tools/test-rnp-dom.js float noruby
           node tools/test-rnp-dom.js slide noruby
           node tools/test-rnp-dom.js lyricbar
           node tools/test-rnp-dom.js lyricbar noruby
-
       - name: 打包冒烟
-        run: node tools/pack.js
-
-      - name: 校验产物
         run: |
-          test -f builds/jp-furigana.plugin
+          node tools/pack.js
           unzip -t builds/jp-furigana.plugin
-          # manifest.json 必须在 zip 根层，否则 BetterNCM 认不出来
-          unzip -l builds/jp-furigana.plugin | grep -qE ' manifest\.json$'
-          # 条目名不能有反斜杠（用字符类而不是 '\\'，后者会让 grep 报 Trailing backslash）
-          if unzip -l builds/jp-furigana.plugin | grep -q '[\]'; then
-            echo "条目名里有反斜杠"; exit 1
-          fi
-          echo "产物校验通过"
 
-      # 版本号发过就跳过，所以合到 main 但没 bump 版本时不会重复发
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jp-furigana-plugin
+          path: builds/jp-furigana.plugin
+          if-no-files-found: error
+
+  windows-save:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Windows 原子保存
+        run: node tests/cache-write.test.cjs
+
+  release:
+    needs: [test, windows-save]
+    # Preserve upstream main -> v<manifest.version>. Fork pushes only run checks.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'Leleawa/jp-furigana'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: jp-furigana-plugin
+          path: release-artifact
       - name: 发布 Release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           version=$(node -p "require('./src/manifest.json').version")
           tag="v$version"
-          if gh release view "$tag" > /dev/null 2>&1; then
-            echo "$tag 已经发过了，跳过"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists; skip."
             exit 0
           fi
-
-          # 说明就是上一个 release 之后的提交；没有上一个 release 就把历史全列出来
           notes="$RUNNER_TEMP/release-notes.md"
           prev=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' || true)
-          if [ -n "$prev" ] && git rev-parse -q --verify "refs/tags/$prev" > /dev/null; then
-            echo "上一个 release: $prev"
+          if [ -n "$prev" ] && git rev-parse "$prev" >/dev/null 2>&1; then
             git log --no-merges --pretty='- %s' "$prev..HEAD" > "$notes"
           else
-            git log --no-merges --pretty='- %s' > "$notes"
+            git log --no-merges -10 --pretty='- %s' > "$notes"
           fi
-          cat "$notes"
-
-          gh release create "$tag" builds/jp-furigana.plugin --title "$version" --notes-file "$notes"
+          gh release create "$tag" release-artifact/jp-furigana.plugin --title "$version" --notes-file "$notes"

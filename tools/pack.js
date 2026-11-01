@@ -7,10 +7,7 @@
 // 除了 src/ 里的运行时文件，还会带上仓库根目录的 LICENSE / NOTICE.md /
 // LICENSE-kuromoji.txt —— 我们分发了 kuromoji 和 IPADIC，许可要求随附声明。
 //
-// 自己写 zip 而不是调 PowerShell：PS 5.1 读没有 BOM 的 .ps1 会按 ANSI 解，中文注释
-// 一乱语法就崩；而且 ZipFile::CreateFromDirectory 会把条目名写成 dict\x（反斜杠，
-// 不符合 ZIP 规范，解压端可能不建子目录）。Node 两个坑都没有，CI 里也不必用
-// Windows runner。
+// 使用 Node 标准库写 ZIP，条目统一使用正斜杠，兼容本地与跨平台 CI。
 
 'use strict';
 
@@ -24,12 +21,18 @@ const OUT_DIR = path.join(ROOT, 'builds');
 const OUT = path.join(OUT_DIR, 'jp-furigana.plugin');
 
 // 全部取自 src/，和 BetterNCM 商店的取法一致（商店按 subpath=/src 直接打包这个目录），
-// 这样我们发的 .plugin 和商店分发的内容完全一样，不会有两套。
+// 运行源码来自同一目录。商店会将预览图单独发布，本地包保留该图。
 // 解包后这些必须直接躺在插件目录根下（manifest.json 在最外层）。
 const SRC_FILES = [
 	'manifest.json',
 	'main.js',
 	'furigana.js',
+	'external-core.js',
+	'user-edits.js',
+	'external.js',
+	'editor.js',
+	'rnp-settings.js',
+	'source-dialog.js',
 	'kuromoji.js',
 	'preview.jpg',
 	// kuromoji 和 IPADIC 的许可要求随附声明，所以这三个也得进包
@@ -59,10 +62,10 @@ function crc32(buf) {
 
 /** ZIP 用的 DOS 时间戳，秒只有 2 秒精度 */
 function dosDateTime(date) {
-	const year = Math.max(1980, date.getFullYear());
+	const year = Math.max(1980, date.getUTCFullYear());
 	return {
-		time: (date.getHours() << 11) | (date.getMinutes() << 5) | (date.getSeconds() >> 1),
-		date: ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate(),
+		time: (date.getUTCHours() << 11) | (date.getUTCMinutes() << 5) | (date.getUTCSeconds() >> 1),
+		date: ((year - 1980) << 9) | ((date.getUTCMonth() + 1) << 5) | date.getUTCDate(),
 	};
 }
 
@@ -172,8 +175,8 @@ function main() {
 	const dictCount = entries.filter((e) => e.name.startsWith('dict/')).length;
 	if (dictCount !== 12) throw new Error(`dict/ 下应有 12 个词典文件，实际 ${dictCount} 个`);
 
-	// BetterNCM 商店按 subpath=/src 直接打包整个 src/，所以 src/ 里任何多出来的文件
-	// 都会被分发出去。这里断言 src/ 的内容和打包清单完全一致，防止误提交临时文件。
+	// BetterNCM 商店抓取整个 /src（预览图会单独发布）；目录中不能夹带临时文件。
+	// 这里断言 src/ 的内容和本地打包清单完全一致。
 	const expected = new Set([...SRC_FILES, ...SRC_DIRS]);
 	const actual = fs.readdirSync(SRC);
 	const extra = actual.filter((f) => !expected.has(f));
@@ -211,4 +214,5 @@ function main() {
 	}
 }
 
-main();
+if(require.main===module)main();
+module.exports={collect,buildZip};

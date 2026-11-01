@@ -11,7 +11,7 @@
 
 ## 安装
 
-从 [Releases](../../releases) 下载 `jp-furigana.plugin`, 放进 BetterNCM 的插件目录后重启网易云
+从 [Releases](https://github.com/Leleawa/jp-furigana/releases) 下载 `jp-furigana.plugin`, 放进 BetterNCM 的插件目录后重启网易云
 
 ## 说明
 
