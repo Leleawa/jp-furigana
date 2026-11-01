@@ -48,6 +48,15 @@ async function until(fn) { for (let n = 0; n < 200; n++) { if (fn()) return; awa
 	assert.equal(f.win.JPFurigana.config.readingSource, 'external'); assert.equal(select.value, 'external');
 	assert.equal(f.stored().externalConsent, true); assert.equal(f.stored().readingSource, 'external');
 	f.win.JPFurigana.set('readingSource', 'dict'); assert.equal(f.win.JPFurigana.set('readingSource', 'external'), 'external'); assert(!f.notice());
+	// 撤销同意：切回网易云音译并清掉确认，下次开启外部网站会重新提示。
+	const revoke = panel.querySelector('[data-a="revokeConsent"]');
+	assert(panel.querySelector('.fg-consent-row').hidden === false, 'The revoke button is shown after consenting');
+	revoke.click(); await tick();
+	assert.equal(f.win.JPFurigana.config.readingSource, 'romaji'); assert.equal(f.win.JPFurigana.config.externalConsent, false);
+	assert.equal(f.stored().externalConsent, false); assert.equal(select.value, 'romaji');
+	assert(panel.querySelector('.fg-consent-row').hidden, 'The revoke button hides once consent is withdrawn');
+	f.win.JPFurigana.set('readingSource', 'external'); assert(f.notice(), 'Revoking makes the notice appear again');
+	f.notice().querySelector('[data-cancel]').click(); await tick(); assert.equal(f.win.JPFurigana.config.readingSource, 'romaji');
 	f.win.close();
 
 	// Settings saved before the notice existed: ask before the first request, fall back on cancel.
@@ -64,5 +73,5 @@ async function until(fn) { for (let n = 0; n < 200; n++) { if (fn()) return; awa
 	await until(() => f.requests.length);
 	assert(!f.notice()); assert.equal(f.win.JPFurigana.config.readingSource, 'external');
 	f.win.close();
-	console.log('External consent passed: notice before switching, cancel keeps source, settings select revert, remembered confirmation, legacy external settings and terms links.');
+	console.log('External consent passed: notice before switching, cancel keeps source, settings select revert, remembered confirmation, revoking, legacy external settings and terms links.');
 })().catch(e => { console.error(e); process.exitCode = 1; });

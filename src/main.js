@@ -1845,6 +1845,11 @@
 			.then(ok => { consentPending = null; if (ok) { config.externalConsent = true; saveConfig(); } return ok; });
 		return consentPending;
 	}
+	// 撤销之前的确认：切回网易云音译，下次开启外部网站会重新弹提示。已缓存的歌词文件不动
+	function revokeExternalConsent() {
+		if (config.readingSource === 'external') setConfigValue('readingSource', 'romaji');
+		setConfigValue('externalConsent', false);
+	}
 	function externalStatusText() {
 		const language = currentTrackLanguage(); if (language.eligible !== true) return language.status;
 		const info = externalClient && externalClient.inspect();
@@ -1971,7 +1976,7 @@
 				#jp-furigana-config .fg-links a { text-decoration: underline; cursor: pointer; opacity: .85; }
 				#jp-furigana-config .fg-links a:hover { opacity: 1; }
 				#jp-furigana-config input[type="text"] { width: 320px; }
-				#jp-furigana-config .fg-external-settings[hidden] { display: none !important; }
+				#jp-furigana-config .fg-external-settings[hidden], #jp-furigana-config .fg-consent-row[hidden] { display: none !important; }
 				#jp-furigana-config .fg-external-error { color: #e67e73; font-size: 12px; }
 				#jp-furigana-config .fg-edit-interrupt { color:#e45454;white-space:normal; }
 				#jp-furigana-config .fg-preview {
@@ -2005,6 +2010,7 @@
 					<option value="external">外部网站</option>
 				</select>
 			</div>
+			<div class="fg-row fg-consent-row"><button data-a="revokeConsent">撤销外部网站同意</button><span class="fg-hint">撤销后切回网易云音译，下次开启外部网站时会重新提示</span></div>
 			<section class="fg-external-settings">
 				<div class="fg-hint">外部来源会联网获取并在本地保存歌词，请遵守来源网站使用条款。<a href="#" data-open="https://utaten.com/index/agreement">UtaTen 条款</a> · <a href="#" data-open="https://www.uta-net.com/info/kiyaku.html">歌ネット条款</a></div>
 				<h3>外部歌词</h3>
@@ -2065,6 +2071,7 @@
 		function refreshStatus() {
 			const section = root.querySelector('.fg-external-settings');
 			section.hidden = config.readingSource !== 'external';
+			root.querySelector('.fg-consent-row').hidden = !config.externalConsent;
 			const info = externalClient && externalClient.inspect();
 			const externalStatus = root.querySelector('.fg-external-status'), text = externalStatusText();
 			if (externalStatus.textContent !== text) externalStatus.textContent = text;
@@ -2140,6 +2147,7 @@
 		onClick('externalAssign',()=>chooseExternalSource().catch(error=>{root.querySelector('.fg-external-error').textContent=error.message;}));
 		onClick('editMode', () => toggleEditor().catch(e => { root.querySelector('.fg-external-error').textContent = e.message; }));
 		onClick('cacheManager', () => editor && editor.openManager());
+		onClick('revokeConsent', revokeExternalConsent);
 		onClick('rescan', () => {
 			rescan();
 			setTimeout(refreshStatus, 500);
