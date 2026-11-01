@@ -33,7 +33,7 @@ async function run(rnp) {
 		external.push(url);return url.includes('/search')?'<table><tr><td class="searchResult__title"><a href="/lyric/test/">星の手紙</a></td><td class="searchResult__artist"><p><a>あおい</a></p></td></tr></table>':'<h2 class="newLyricTitle__main">星の手紙</h2><h3><a href="/artist/1/">あおい</a></h3><div class="lyricBody"><div class="hiragana"><span class="ruby"><span class="rb">空</span><span class="rt">そら</span></span>をみる</div></div>';
 	}});
 
-	win.localStorage.setItem('jp-furigana.config',JSON.stringify({readingSource:'external',externalProvider:'utaten',externalAutoRetry:'off',skipCredits:false}));
+	win.localStorage.setItem('jp-furigana.config',JSON.stringify({readingSource:'external',externalProvider:'utaten',externalAutoRetry:'off',skipCredits:false,externalConsent:true}));
 	win.eval(fs.readFileSync(path.join(src,'main.js'),'utf8'));
 	const notify=()=>{for(const fn of [...subscriptions])fn();win.JPFurigana.pass();};
 	const lrc=lines=>({lrc:{lyric:lines.map((t,i)=>'[00:'+String(i).padStart(2,'0')+']'+t).join('\n')}});
