@@ -185,6 +185,9 @@
 		applying: false,
 		lineCount: 0,
 		annotated: 0,
+		srcExternal: 0,
+		srcRomaji: 0,
+		srcDict: 0,
 		lastPassMs: 0,
 	};
 
@@ -1668,15 +1671,74 @@
 
 	// ------------------------------------------------------------------ 调试接口
 
+	const SOURCE_NAMES = { external: '外部网站', romaji: '官方音译', dict: '词典' };
+	const READING_SOURCE_NAMES = { romaji: '网易云音译优先', dict: '只用词典', external: '外部网站' };
+	const PROVIDER_NAMES = { auto: 'UtaTen 优先，歌ネット备用', utaten: '仅 UtaTen', utanet: '仅歌ネット' };
+
+	/** 把已注音的一行读回「漢字(かんじ)」这样的纯文本，不用看 HTML 就能核对读音 */
+	function annotationPreview(line) {
+		const out = [];
+		for (const host of line.__fgHosts || []) {
+			const wrap = host.__fgWrap;
+			if (!wrap) continue;
+			for (const node of wrap.childNodes) {
+				if (node.nodeType === 3) { out.push(node.nodeValue); continue; }
+				if (!node.classList) continue;
+				if (node.classList.contains('fg-hide')) continue; // 原文自带的「（かな）」括号
+				const base = node.__fgBase != null ? node.__fgBase : node.textContent;
+				// 编辑模式下 .fg-rt 里还挂着被划掉的旧读音，所以优先读 .fg-reading
+				const rt = node.querySelector('.fg-reading') || node.querySelector('.fg-rt');
+				const reading = rt ? rt.textContent : '';
+				out.push(reading ? `${base}(${reading})` : base);
+			}
+		}
+		return out.join('');
+	}
+
+	/** 一行为什么没注音；顺序和 processLine 里的判断保持一致 */
+	function skipReason(text) {
+		if (config.skipCredits && FuriganaCore.isCreditLine(text)) return '制作信息行';
+		if (config.skipNoKanaLines && !FuriganaCore.hasKana(text)) return '没有假名';
+		if (!FuriganaCore.hasKanji(text)) return '没有汉字';
+		return '没取到读音';
+	}
+
 	function probe() {
+		// 先跑一次定位，报告里的 matchedBy 和行分类才是此刻的真相
+		const lines = collectLines().filter(Boolean);
+		const done = lines.filter((l) => l.__fgHosts && l.__fgHosts.length);
+		const skipped = lines.filter((l) => l.__fgHosts && !l.__fgHosts.length);
+		const pending = lines.filter((l) => !l.__fgHosts);
+		const bySrc = (s) => done.filter((l) => l.__fgSource === s).length;
+		const external = externalClient && externalClient.inspect();
+		const language = currentTrackLanguage();
 		const info = {
+			build: BUILD,
 			betterncm: state.betterncmVersion,
 			tokenizerReady: !!state.tokenizer,
 			loadError: state.loadError && String(state.loadError),
+			readingSource: config.readingSource,
 			matchedBy: state.matchedBy,
-			lineCount: state.lineCount,
-			annotated: state.annotated,
+			lineCount: lines.length,
+			done: done.length,
+			skipped: skipped.length,
+			pending: pending.length,
+			srcExternal: bySrc('external'),
+			srcRomaji: bySrc('romaji'),
+			srcDict: bySrc('dict'),
 			lastPassMs: state.lastPassMs,
+			trackId: getCurrentTrackId(),
+			japanese: language.eligible,
+			apiStatus: state.apiStatus,
+			apiTrackId: state.apiTrackId,
+			storeFound: !!state.store,
+			external: external && {
+				status: external.status,
+				source: external.source,
+				url: external.url,
+				edits: external.edits,
+				loading: external.loading,
+			},
 			container: state.container
 				? {
 						tag: state.container.tagName,
@@ -1685,58 +1747,115 @@
 				  }
 				: null,
 		};
-		console.log(LOG, 'probe', info);
 
-		console.log(LOG, '已知选择器命中情况：');
-		for (const sel of KNOWN_SELECTORS) {
-			let n = 0;
-			try {
-				n = document.querySelectorAll(sel).length;
-			} catch (e) {
-				n = -1;
-			}
-			console.log('   ', n, sel);
-		}
+		const row = (...parts) => console.log(LOG, parts.filter(Boolean).join('｜'));
+		const sub = (text) => console.log('    ' + text);
 
-		// 前几行往往是「作词:/编曲:」这类被跳过的行，所以两类分别取样
-		const lines = collectLines().filter(Boolean);
-		const done = lines.filter((l) => l.__fgHosts && l.__fgHosts.length);
-		const skipped = lines.filter((l) => l.__fgHosts && !l.__fgHosts.length);
-		const pending = lines.filter((l) => !l.__fgHosts);
-		console.log(
-			LOG,
-			`共 ${lines.length} 行：已注音 ${done.length}，跳过 ${skipped.length}，未处理 ${pending.length}`
+		console.log(LOG, `probe ${BUILD}`, info);
+		row(
+			`环境：BetterNCM ${state.betterncmVersion || '未知'}`,
+			`词典 ${state.tokenizer ? '已就绪' : state.loadError ? '加载失败：' + state.loadError : '加载中'}`,
+			`内核 ruby ${hasRuby() ? '支持' : '不支持（降级排版）'}`,
+			`注音 ${config.enabled ? '已启用' : '已关闭'}`
 		);
+		row(
+			`设置：读音来源 ${READING_SOURCE_NAMES[config.readingSource] || config.readingSource}` +
+				(config.readingSource === 'external'
+					? `（${PROVIDER_NAMES[config.externalProvider] || config.externalProvider}）`
+					: ''),
+			config.kana === 'katakana' ? '片假名' : '平假名',
+			`逐字歌词 ${config.karaoke ? '开' : '关'}`,
+			`编辑模式 ${editor && editor.isEnabled() ? '开' : '关'}`
+		);
+		row(
+			`当前曲目：id ${getCurrentTrackId() || '未知'}`,
+			`语种 ${language.eligible === true ? '日语' : language.eligible === false ? '非日语，整首跳过' : '确认中'}`
+		);
+		row(`歌词容器：${state.matchedBy || '未找到歌词元素'}`, `${lines.length} 行`, `上次耗时 ${state.lastPassMs}ms`);
+		if (lines.length) sub('path: ' + domPath(lines[0]));
+		row(`处理结果：已注音 ${done.length}`, `跳过 ${skipped.length}`, `未处理 ${pending.length}`);
 
-		const bySrc = (s) => done.filter((l) => l.__fgSource === s).length;
-		console.log(LOG, `读音来源：官方音译 ${bySrc('romaji')} 行，词典 ${bySrc('dict')} 行`);
+		// 这里统计的是「每一行最终用了谁的读音」，和下面官方音译数据的行数不是一回事
+		const rest = done.length - info.srcExternal - info.srcRomaji - info.srcDict;
+		const dist = [
+			['external', info.srcExternal],
+			['romaji', info.srcRomaji],
+			['dict', info.srcDict],
+		]
+			.filter(([s, n]) => n || s !== 'external' || config.readingSource === 'external')
+			.map(([s, n]) => `${SOURCE_NAMES[s]} ${n} 行`);
+		if (rest > 0) dist.push(`其他 ${rest} 行`);
+		console.log(LOG, '读音来源（按行统计）：' + dist.join('｜'));
+
+		const romajiRole =
+			config.readingSource === 'dict'
+				? '当前设置不用它'
+				: config.readingSource === 'external'
+				? '只给网站未命中的行兜底'
+				: '优先用它';
 		console.log(
 			LOG,
-			`官方音译：${state.apiStatus}（曲目 id ${state.apiTrackId || '未知'}，` +
+			`官方音译数据：${state.apiStatus}（${romajiRole}；曲目 id ${state.apiTrackId || '未知'}，` +
 				`Redux store ${state.store ? '已找到' : '未找到'}）`
 		);
-		info.trackId = state.apiTrackId;
-		info.apiStatus = state.apiStatus;
-		info.storeFound = !!state.store;
 
-		const dump = (label, list, n) => {
-			for (const l of list.slice(0, n)) {
-				const src = l.__fgSource ? `(${l.__fgSource})` : '';
-				const text = plainText(l);
-				console.log(`   [${label}]${src} text:`, JSON.stringify(text));
-				const romaji = state.apiRomaji && state.apiRomaji.get(FuriganaCore.lyricKey(text));
-				if (romaji) console.log(`   [${label}] 音译:`, JSON.stringify(romaji));
-				console.log(`   [${label}] html:`, l.outerHTML.slice(0, 600));
+		if (config.readingSource === 'external' || (external && external.ready)) {
+			if (!external) console.log(LOG, '外部网站：尚未初始化');
+			else {
+				// 状态文案本身是给设置面板用的多行文本，这里只把第一行放进标题
+				const status = String(external.status || '未请求').split('\n');
+				row(
+					`外部网站：${status[0]}`,
+					external.source && `来源 ${external.source}`,
+					external.loading && '获取中',
+					external.waitingRetry && '等待重试',
+					external.edits ? `人工纠音 ${external.edits} 条` : ''
+				);
+				for (const extra of status.slice(1)) if (extra.trim()) sub(extra.trim());
+				if (external.error) sub('错误：' + external.error);
+				if (external.warning) sub('提示：' + external.warning);
+				if (external.url) sub('来源网页：' + external.url);
+				if (external.cachePath) sub('缓存目录：' + external.cachePath);
+				if (external.songId && external.songId !== getCurrentTrackId())
+					sub(`注意：网站数据属于曲目 ${external.songId}，当前曲目 ${getCurrentTrackId() || '未知'}`);
 			}
+		}
+
+		console.log(LOG, '已知选择器命中（至少两行可见才会被采用）：');
+		for (const sel of KNOWN_SELECTORS) {
+			let found;
+			try {
+				found = [...document.querySelectorAll(sel)];
+			} catch (e) {
+				sub(`选择器无效：${sel}`);
+				continue;
+			}
+			const texted = found.filter(hasText);
+			const visible = texted.filter(isVisible).length;
+			const mine = state.matchedBy && state.matchedBy.indexOf('known:' + sel) === 0;
+			sub(`命中 ${found.length} / 有文字 ${texted.length} / 可见 ${visible}　${sel}${mine ? '　← 本次使用' : ''}`);
+		}
+
+		// 前几行往往是「作词:/编曲:」这类被跳过的行，所以三类分别取样
+		const dump = (label, list, n, reason) => {
+			list.slice(0, n).forEach((l, i) => {
+				const text = plainText(l);
+				console.log(LOG, `取样 ${label} #${i + 1}：${text}`);
+				if (reason) sub('原因：' + reason(text));
+				if (l.__fgErrMsg) sub('处理失败：' + l.__fgErrMsg);
+				if (l.__fgHosts && l.__fgHosts.length) {
+					sub(`来源：${SOURCE_NAMES[l.__fgSource] || l.__fgSource || '未知'}`);
+					sub('注音：' + (annotationPreview(l) || '（空）'));
+				}
+				const romaji = state.apiRomaji && state.apiRomaji.get(FuriganaCore.lyricKey(text));
+				if (romaji) sub('官方音译：' + romaji);
+				sub('html：' + l.outerHTML.slice(0, 400));
+			});
 		};
 		dump('已注音', done, 2);
-		dump('跳过', skipped, 2);
+		dump('跳过', skipped, 2, skipReason);
 		dump('未处理', pending, 2);
-		if (lines.length) console.log('   path:', domPath(lines[0]));
 
-		info.done = done.length;
-		info.skipped = skipped.length;
-		info.pending = pending.length;
 		return info;
 	}
 
@@ -2087,8 +2206,8 @@
 				`词典：${state.tokenizer ? '已就绪' : state.loadError ? '失败 ' + state.loadError : '加载中'}`,
 				`定位方式：${state.matchedBy || '未找到歌词元素'}`,
 				`歌词行数：${state.lineCount}，已注音：${state.annotated}，上次耗时：${state.lastPassMs}ms`,
-				`读音来源：官方音译 ${state.srcRomaji} 行 / 词典 ${state.srcDict} 行`,
-				`官方音译：${state.apiStatus}（曲目 id ${state.apiTrackId || '未知'}，store ${state.store ? '已找到' : '未找到'}）`,
+				`读音来源：外部网站 ${state.srcExternal} 行 / 官方音译 ${state.srcRomaji} 行 / 词典 ${state.srcDict} 行`,
+				`官方音译数据：${state.apiStatus}（曲目 id ${state.apiTrackId || '未知'}，store ${state.store ? '已找到' : '未找到'}）`,
 				`缓存条目：${cache.size}`,
 			].join('\n');
 		}
