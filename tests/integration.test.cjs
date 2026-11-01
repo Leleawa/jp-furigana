@@ -49,7 +49,7 @@ win.FuriganaExternal.browserTransport = () => ({
 		return '<h2 class="newLyricTitle__main">星の手紙<span>歌詞</span></h2><h3><a href="/artist/1">試験歌手</a></h3><div class="lyricBody"><div class="hiragana"><span class="ruby"><span class="rb">恋人</span><span class="rt">あなた</span></span>と<span class="ruby"><span class="rb">空</span><span class="rt">そら</span></span>をみる<br>' + [screenshot.html,weekend.html,alternates.html,...alternates.context.map(l=>l.html)].join('<br>') + '</div></div>';
 	}
 });
-win.localStorage.setItem('jp-furigana.config', JSON.stringify({ readingSource: 'external', externalProvider: 'utaten' }));
+win.localStorage.setItem('jp-furigana.config', JSON.stringify({ readingSource: 'external', externalProvider: 'utaten', externalConsent: true }));
 win.eval(fs.readFileSync(path.join(src, 'main.js'), 'utf8'));
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn) { for (let n = 0; n < 100; n++) { if (fn()) return; await sleep(30); } throw new Error('Timed out waiting for plugin'); }

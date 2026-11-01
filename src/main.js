@@ -28,6 +28,7 @@
 		externalProvider: 'auto', // UtaTen first, then Uta-Net
 		externalAutoRetry: 'failed', // off | failed (at most three transient-error retries per load)
 		externalCacheDir: '', // default: <BetterNCM data>/lyrics/jp-furigana
+		externalConsent: false, // 用户在提示窗口里确认过才会访问外部歌词网站
 		rtSize: 60, // rt 相对底字的百分比
 		rtOpacity: 80, // rt 不透明度百分比
 		karaoke: true, // 逐字歌词：把注音按字符偏移分发到内部的 span，保留逐字动画
@@ -534,6 +535,11 @@
 	}
 	function ensureExternal() {
 		if (config.readingSource !== 'external' || editPreparing) return;
+		// 旧版本里已经选了外部网站、但还没看过提示的，先确认再联网
+		if (!config.externalConsent) {
+			ensureExternalConsent().then(ok => { if (ok) schedule(0); else if (config.readingSource === 'external') setConfigValue('readingSource', 'romaji'); });
+			return;
+		}
 		const id = getCurrentTrackId();
 		if (playPending && playPendingTarget === id) return;
 		if (currentTrackLanguage().eligible !== true) { if (state.externalTrackId) resetExternal(); return; }
@@ -1818,6 +1824,12 @@
 		}
 		const choices = { readingSource: ['romaji', 'dict', 'external'], externalProvider: ['auto', 'utaten', 'utanet'], externalAutoRetry: ['off', 'failed'], kana: ['hiragana', 'katakana'] };
 		if (choices[key] && !choices[key].includes(value)) throw new Error('无效的设置选项');
+		if (key === 'readingSource' && value === 'external' && !config.externalConsent) {
+			// 先弹提示，确认后再真正切过去；取消就保持原来的读音来源
+			ensureExternalConsent().then(ok => { if (ok && config.readingSource !== 'external') setConfigValue(key, value); else notifyConfigUI(); });
+			notifyConfigUI();
+			return config[key];
+		}
 		if (typeof DEFAULTS[key] === 'boolean') value = !!value;
 		config[key] = value; saveConfig(); updateStyles();
 		if (key === 'enabled') value ? enable() : disable();
@@ -1825,6 +1837,18 @@
 		else if (NEEDS_RESCAN.includes(key)) rescan();
 		notifyConfigUI();
 		return config[key];
+	}
+	let consentPending = null;
+	function ensureExternalConsent() {
+		if (config.externalConsent) return Promise.resolve(true);
+		if (!consentPending) consentPending = FuriganaSourceDialog.confirmExternal({ openUrl: url => betterncm.ncm.openUrl(url) })
+			.then(ok => { consentPending = null; if (ok) { config.externalConsent = true; saveConfig(); } return ok; });
+		return consentPending;
+	}
+	// 撤销之前的确认：切回网易云音译，下次开启外部网站会重新弹提示。已缓存的歌词文件不动
+	function revokeExternalConsent() {
+		if (config.readingSource === 'external') setConfigValue('readingSource', 'romaji');
+		setConfigValue('externalConsent', false);
 	}
 	function externalStatusText() {
 		const language = currentTrackLanguage(); if (language.eligible !== true) return language.status;
@@ -1886,6 +1910,7 @@
 		return {warning,text:editor&&editor.isEnabled()?'退出编辑模式':warning?'将中断网站注音获取，再次点击进入编辑模式':'进入编辑模式'};
 	}
 	async function enterEditor(id, settings = null, cancelled = false) {
+		if (!await ensureExternalConsent()) return;
 		const ticket=++editEntry, client=getExternalClient();state.editInterrupt=null;
 		if (client.inspect().loading && state.externalTask) await state.externalTask;
 		if (getCurrentTrackId()!==id || ticket!==editEntry) return;
@@ -1951,7 +1976,7 @@
 				#jp-furigana-config .fg-links a { text-decoration: underline; cursor: pointer; opacity: .85; }
 				#jp-furigana-config .fg-links a:hover { opacity: 1; }
 				#jp-furigana-config input[type="text"] { width: 320px; }
-				#jp-furigana-config .fg-external-settings[hidden] { display: none !important; }
+				#jp-furigana-config .fg-external-settings[hidden], #jp-furigana-config .fg-consent-row[hidden] { display: none !important; }
 				#jp-furigana-config .fg-external-error { color: #e67e73; font-size: 12px; }
 				#jp-furigana-config .fg-edit-interrupt { color:#e45454;white-space:normal; }
 				#jp-furigana-config .fg-preview {
@@ -1985,6 +2010,7 @@
 					<option value="external">外部网站</option>
 				</select>
 			</div>
+			<div class="fg-row fg-consent-row"><button data-a="revokeConsent">撤销外部网站同意</button><span class="fg-hint">撤销后切回网易云音译，下次开启外部网站时会重新提示</span></div>
 			<section class="fg-external-settings">
 				<div class="fg-hint">外部来源会联网获取并在本地保存歌词，请遵守来源网站使用条款。<a href="#" data-open="https://utaten.com/index/agreement">UtaTen 条款</a> · <a href="#" data-open="https://www.uta-net.com/info/kiyaku.html">歌ネット条款</a></div>
 				<h3>外部歌词</h3>
@@ -2045,6 +2071,7 @@
 		function refreshStatus() {
 			const section = root.querySelector('.fg-external-settings');
 			section.hidden = config.readingSource !== 'external';
+			root.querySelector('.fg-consent-row').hidden = !config.externalConsent;
 			const info = externalClient && externalClient.inspect();
 			const externalStatus = root.querySelector('.fg-external-status'), text = externalStatusText();
 			if (externalStatus.textContent !== text) externalStatus.textContent = text;
@@ -2120,6 +2147,7 @@
 		onClick('externalAssign',()=>chooseExternalSource().catch(error=>{root.querySelector('.fg-external-error').textContent=error.message;}));
 		onClick('editMode', () => toggleEditor().catch(e => { root.querySelector('.fg-external-error').textContent = e.message; }));
 		onClick('cacheManager', () => editor && editor.openManager());
+		onClick('revokeConsent', revokeExternalConsent);
 		onClick('rescan', () => {
 			rescan();
 			setTimeout(refreshStatus, 500);
@@ -2137,7 +2165,8 @@
 
 		const refreshAll = () => {
 			for (const el of root.querySelectorAll('[data-k]')) {
-				if (document.activeElement === el) continue;
+				// 只跳过正在输入的文本框和拖动中的滑块；下拉框要能被确认窗口的结果改回去
+				if (document.activeElement === el && (el.type === 'text' || el.type === 'range')) continue;
 				if (el.type === 'checkbox') el.checked = !!config[el.dataset.k];
 				else el.value = sliderDrafts.has(el.dataset.k) ? sliderDrafts.get(el.dataset.k) : config[el.dataset.k];
 				const out = root.querySelector('[data-v="' + el.dataset.k + '"]');
