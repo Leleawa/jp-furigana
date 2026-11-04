@@ -8,5 +8,14 @@ const assert=require('node:assert/strict'),{JSDOM}=require('jsdom'),dialog=requi
  const clear=dialog.open(api,doc);form=doc.querySelector('form');form.querySelector('input').value='';form.dispatchEvent(new dom.window.Event('submit',{cancelable:true}));assert.deepEqual(await clear,{songId:'1',url:null});
  const changed=dialog.open(api,doc);songId='2';form=doc.querySelector('form');form.dispatchEvent(new dom.window.Event('submit',{cancelable:true}));assert(form.querySelector('[role=alert]').textContent.includes('歌曲已变化'));form.querySelector('[data-cancel]').click();assert.equal(await changed,null);
  const escaped=dialog.open(api,doc);doc.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));assert.equal(await escaped,null);assert(!doc.querySelector('[role=dialog]'));assert.equal(doc.querySelectorAll('#fg-source-dialog-style').length,1);
- dom.window.close();console.log('Source dialog passed: focus, duplicate prevention, URL validation, canonical submit, reset, cancellation, song changes and cleanup.');
+ const opened=[],notice={openUrl:url=>opened.push(url)};doc.getElementById('open').focus();
+ const accepted=dialog.confirmExternal(notice,doc);assert.equal(dialog.confirmExternal(notice,doc),accepted);assert.equal(doc.querySelectorAll('[role=alertdialog]').length,1);
+ const box=doc.querySelector('[role=alertdialog]');assert.equal(doc.activeElement,box.querySelector('[data-cancel]'),'Cancel is the default focus');
+ box.querySelector('[data-open="https://utaten.com/index/agreement"]').click();assert.deepEqual(opened,['https://utaten.com/index/agreement']);assert(box.isConnected,'Opening the terms keeps the notice open');
+ box.querySelector('[data-accept]').click();assert.equal(await accepted,true);assert(!doc.querySelector('[role=alertdialog]'));assert.equal(doc.activeElement.id,'open');
+ const cancelled=dialog.confirmExternal(notice,doc);doc.querySelector('[role=alertdialog] [data-cancel]').click();assert.equal(await cancelled,false);
+ const escapedNotice=dialog.confirmExternal(notice,doc);doc.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));assert.equal(await escapedNotice,false);
+ const outside=dialog.confirmExternal(notice,doc);doc.querySelector('.fg-source-backdrop').click();assert.equal(await outside,false);
+ assert(!doc.querySelector('.fg-source-backdrop'));assert.equal(doc.querySelectorAll('#fg-source-dialog-style').length,1);
+ dom.window.close();console.log('Source dialog passed: focus, duplicate prevention, URL validation, canonical submit, reset, cancellation, song changes, external notice and cleanup.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
