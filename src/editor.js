@@ -6,7 +6,7 @@
 	'use strict';
 	function install(api, doc = document) {
 		const win = doc.defaultView;
-		let enabled = false, popup = null, manager = null, hoverTimer = null;
+		let enabled = false, popup = null, manager = null, closeManager = null, hoverTimer = null;
 		const style = doc.createElement('style');
 		style.textContent = `
 			.fg-rt .fg-edit-stack { display:inline-block; position:relative; vertical-align:bottom; opacity:1 !important; }
@@ -33,9 +33,10 @@
 			.fg-editor-pop [data-details] { display:none; } .fg-editor-pop.focused [data-details] { display:block; }
 			.fg-editor-pop .fg-buttons { display:flex; gap:5px; flex-wrap:wrap; margin-top:8px; }
 			.fg-edit-backdrop { position:fixed; z-index:2147483050; inset:0; background:#0008; display:flex; align-items:center; justify-content:center; }
-			.fg-cache-manager { width:min(900px,92vw); height:min(700px,88vh); padding:20px; display:flex; flex-direction:column; gap:12px; }
-			.fg-cache-manager header,.fg-cache-tools { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
-			.fg-cache-manager h2 { font-size:20px; margin:0; flex:1; }
+			.fg-cache-manager { width:min(900px,92vw); height:min(700px,88vh); padding:20px; display:flex; flex-direction:column; gap:12px; min-height:0; overflow:hidden; }
+			.fg-cache-header,.fg-cache-tools { display:flex; align-items:center; gap:10px; flex-wrap:wrap; flex-shrink:0; }
+			.fg-cache-title { font-size:20px; margin:0; flex:1; }
+			.fg-cache-manager > [role=status],.fg-cache-manager > [role=alert] { flex-shrink:0; max-height:18vh; overflow:auto; overflow-wrap:anywhere; }
 			.fg-cache-tools input { flex:1; min-width:150px; } .fg-cache-list { overflow:auto; flex:1; min-height:0; }
 			.fg-cache-row { padding:12px 0; border-bottom:1px solid #ffffff22; display:flex; gap:12px; align-items:center; }
 			.fg-cache-row .fg-cache-info { flex:1; min-width:0; overflow-wrap:anywhere; }
@@ -153,15 +154,21 @@
 			if (manager) return;
 			if (!closePopup()) return;
 			const backdrop = doc.createElement('div'); backdrop.className = 'fg-edit-backdrop';
-			backdrop.innerHTML = '<section class="fg-edit-ui fg-cache-manager" role="dialog" aria-modal="true" aria-label="本地歌词管理"><header><h2>本地歌词管理</h2><button data-refresh>刷新</button><button data-close>关闭</button></header><div class="fg-cache-tools"><input data-search aria-label="搜索缓存歌词" placeholder="歌名、歌手或歌曲 ID"><label><input data-modified type="checkbox"> 仅已修改</label></div><div data-summary role="status"></div><div role="alert"></div><div class="fg-cache-list"></div></section>';
+			// RNP fullscreen styles hide every <header>; keep modal controls scoped.
+			backdrop.innerHTML = '<section class="fg-edit-ui fg-cache-manager" role="dialog" aria-modal="true" aria-label="本地歌词管理"><div class="fg-cache-header"><div class="fg-cache-title" role="heading" aria-level="2">本地歌词管理</div><button type="button" data-refresh>刷新</button><button type="button" data-close>关闭</button></div><div class="fg-cache-tools"><input data-search aria-label="搜索缓存歌词" placeholder="歌名、歌手或歌曲 ID"><label><input data-modified type="checkbox"> 仅已修改</label></div><div data-summary role="status"></div><div role="alert"></div><div class="fg-cache-list"></div></section>';
 			doc.body.append(backdrop); manager = backdrop;
 			const box = backdrop.firstElementChild, list = box.querySelector('.fg-cache-list'), search = box.querySelector('[data-search]'), error = box.querySelector('[role=alert]'), summary = box.querySelector('[data-summary]');
 			let rows = [], limit = 50, revision = 0, dir = '';
 			const previousFocus = doc.activeElement;
-			const close = () => { revision++; backdrop.remove(); manager = null; if (previousFocus && previousFocus.isConnected) previousFocus.focus(); };
+			const close = () => {
+				if (manager !== backdrop) return;
+				revision++; doc.removeEventListener('keydown', managerKeys, true); backdrop.remove(); manager = null; closeManager = null;
+				if (previousFocus && previousFocus.isConnected) previousFocus.focus();
+			};
+			closeManager = close;
 			box.querySelector('[data-close]').onclick = close;
 			function button(label, run) {
-				const b = doc.createElement('button'); b.textContent = label;
+				const b = doc.createElement('button'); b.type = 'button'; b.textContent = label;
 				b.onclick = async () => { b.disabled = true; error.textContent = ''; try { await run(); } catch (e) { error.textContent = e.message; } finally { b.disabled = false; } }; return b;
 			}
 			function render() {
@@ -204,15 +211,17 @@
 			}
 			box.querySelector('[data-refresh]').onclick = refresh;
 			search.oninput = () => { limit = 50; render(); }; box.querySelector('[data-modified]').onchange = render;
-			backdrop.addEventListener('keydown', e => {
-				e.stopPropagation(); if (e.key === 'Escape') { e.preventDefault(); close(); }
-				if (e.key === 'Tab') { const nodes = [...box.querySelectorAll('button,input')].filter(n => !n.disabled); const a = nodes[0], b = nodes[nodes.length - 1]; if (e.shiftKey && doc.activeElement === a) { e.preventDefault(); b.focus(); } else if (!e.shiftKey && doc.activeElement === b) { e.preventDefault(); a.focus(); } }
-			});
-			for (const event of ['click', 'mousedown', 'keyup', 'keypress']) backdrop.addEventListener(event, e => e.stopPropagation());
+			function managerKeys(e) {
+				if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); close(); }
+				if (e.key === 'Tab') { const nodes = [...box.querySelectorAll('button,input')].filter(n => !n.disabled); const a = nodes[0], b = nodes[nodes.length - 1]; if (!box.contains(doc.activeElement)) { e.preventDefault(); a.focus(); } else if (e.shiftKey && doc.activeElement === a) { e.preventDefault(); b.focus(); } else if (!e.shiftKey && doc.activeElement === b) { e.preventDefault(); a.focus(); } }
+			}
+			doc.addEventListener('keydown', managerKeys, true);
+			backdrop.addEventListener('click', e => { if (e.target === backdrop) close(); });
+			for (const event of ['click', 'mousedown', 'keydown', 'keyup', 'keypress']) backdrop.addEventListener(event, e => e.stopPropagation());
 			refresh(); search.focus();
 		}
 		return { setEnabled, isEnabled: () => enabled, sync, openManager, prepareNavigation: closePopup,
-			destroy: () => { closePopup(false); if (manager) manager.remove(); bar.remove(); style.remove(); clearTimeout(hoverTimer); doc.body.classList.remove('fg-edit-mode'); doc.removeEventListener('mouseover', hover); doc.removeEventListener('mouseout', leave); doc.removeEventListener('click', click, true); doc.removeEventListener('scroll', scroll, true); win.removeEventListener('beforeunload', beforeUnload); win.removeEventListener('resize', position); } };
+			destroy: () => { closePopup(false); if (closeManager) closeManager(); bar.remove(); style.remove(); clearTimeout(hoverTimer); doc.body.classList.remove('fg-edit-mode'); doc.removeEventListener('mouseover', hover); doc.removeEventListener('mouseout', leave); doc.removeEventListener('click', click, true); doc.removeEventListener('scroll', scroll, true); win.removeEventListener('beforeunload', beforeUnload); win.removeEventListener('resize', position); } };
 	}
 	return { install };
 });

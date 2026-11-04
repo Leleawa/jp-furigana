@@ -8,6 +8,25 @@ const prepare = lines => core.prepare({ provider: 'utaten', lines });
 const groups = prepare([line]);
 const match = (text, data = groups, mode = 'hiragana') => core.segmentsFor(text, data, mode);
 const pairs = segments => segments.filter(s => s.rt).map(s => [s.text, s.rt]);
+// Minimal user reproduction: the kana in parentheses are client-side ruby,
+// not additional lyric text; all three website readings must still be used.
+const inlineLine={text:'思春期 疵口 胸のうち',segments:[{text:'思春期',rt:'ししゅんき'},{text:' '},{text:'疵口',rt:'きずぐち'},{text:' '},{text:'胸',rt:'むね'},{text:'のうち'}]};
+for(const target of ['思春期疵口(きずぐち)胸のうち','思春期疵口（キズグチ）胸のうち','思春期(べつ)疵口(よみ)胸(あやまり)のうち']) {
+	for(const mode of ['hiragana','katakana']) {
+		const result=core.segmentsFor(target,core.prepare({provider:'utaten',lines:[inlineLine]},[target]),mode);
+		assert(result,'Inline client ruby must not make a known website line fall back');
+		assert.equal(result.map(s=>s.text).join(''),target);
+		assert.deepEqual(pairs(result),[['思春期',core.kana('ししゅんき',mode)],['疵口',core.kana('きずぐち',mode)],['胸',core.kana('むね',mode)]]);
+		assert(result.filter(s=>s.hidden).every(s=>/^[（(].*[）)]$/.test(s.text)));
+	}
+}
+const inlineTarget='思春期疵口(きずぐち)胸のうち',inlineRecord={schema:1,songId:'1',provider:'utaten',url:'https://utaten.com/lyric/test/',lines:[inlineLine],userEdits:[]};
+const inlineBaseline=core.segmentsFor(inlineTarget,prepare([inlineLine]),'hiragana');
+const inlineAnnotated=edits.annotate(inlineRecord,inlineTarget,inlineBaseline,'hiragana'),chest=inlineAnnotated.find(s=>s.text==='胸').edit;
+assert.equal(chest.start,inlineTarget.indexOf('胸'),'Correction offsets must include the hidden parentheses');
+const inlineRevision=edits.update(inlineRecord,chest,'こころ');
+assert(edits.annotate(inlineRevision,inlineTarget,inlineBaseline,'hiragana').some(s=>s.text==='胸'&&s.rt==='こころ'));
+assert(core.segmentsFor(inlineTarget,core.prepare({provider:'utanet',lines:[{text:inlineLine.text,romaji:'website'}]}),'hiragana',()=>inlineLine.segments),'Uta-Net uses the same client annotation handling');
 for(const text of [weekend.target,'🌟「'+weekend.target+'！」']){
 	const result=match(text,prepare([weekend.line]));
 	assert(result,'The screenshot differs only in 終末/週末; the whole line must retain website readings');

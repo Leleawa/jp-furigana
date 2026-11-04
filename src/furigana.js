@@ -1036,6 +1036,11 @@
 	 * 括号本身留在片段里但标成 hidden，渲染时藏起来——片段拼起来仍然等于原文，
 	 * 逐字歌词按下标切分不受影响。
 	 */
+	function inlineRubyRanges(text) {
+		return [...text.matchAll(RE_INLINE_RUBY)].map(m => ({
+			from:m.index, mid:m.index+m[1].length, to:m.index+m[0].length, rt:m[2].replace(/・/g,'')
+		}));
+	}
 	function applyInlineRuby(segs, kanaFn) {
 		const text = segs.map((s) => s.text).join('');
 		// 带注音的片段内部不能切（copySegments 只切不带注音的），落在里面的括号注音就不认了
@@ -1045,13 +1050,7 @@
 			if (s.rt) for (let i = pos + 1; i < pos + s.text.length; i++) inside.add(i);
 			pos += s.text.length;
 		}
-		const rubies = [...text.matchAll(RE_INLINE_RUBY)]
-			.map((m) => ({
-				from: m.index,
-				mid: m.index + m[1].length,
-				to: m.index + m[0].length,
-				rt: m[2].replace(/・/g, ''),
-			}))
+		const rubies = inlineRubyRanges(text)
 			.filter((r) => !inside.has(r.from) && !inside.has(r.mid) && !inside.has(r.to));
 		if (!rubies.length) return segs;
 
@@ -1110,5 +1109,6 @@
 		isCreditLine,
 		hasJapaneseLyrics,
 		buildRomajiMap,
+		inlineRubyRanges,
 	};
 });

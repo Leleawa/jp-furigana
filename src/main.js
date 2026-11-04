@@ -13,7 +13,7 @@
 
 	const LOG = '[jp-furigana]';
 	// 改了实现就换一下，方便确认插件到底有没有被重新加载（JPFurigana.build）
-	const BUILD = '1.2.0-browser';
+	const BUILD = '1.2.0-manager-fixes';
 	const REPO_URL = 'https://github.com/Leleawa/jp-furigana';
 	const CONFIG_KEY = 'jp-furigana.config';
 	// 注音算法改了就换 key，让旧缓存自然失效
@@ -2061,10 +2061,18 @@
 			if (row.path !== dir + '/' + row.songId + '.json') throw new Error('缓存目录已变化，请刷新列表');
 			await client.manage(row.songId, config, 'read');
 			if (getCurrentTrackId() !== row.songId) {
-				betterncm.ncm.openUrl('orpheus://song/' + row.songId + '/?autoplay=1');
+				// Use the client's ordinary play action, which fetches song details and
+				// checks privileges. An OS orpheus:// link can start a second client.
+				const store=state.store || findReduxStore();
+				if(!looksLikeStore(store))throw new Error('当前客户端未提供应用内播放接口；请手动播放后进入编辑模式');
+				let playbackError;
+				const task=store.dispatch({type:'async:action/doAction',payload:{actionId:'play',eventType:'click',data:{
+					resource:{id:row.songId},resourceType:'track',from:{scene:'orpheusMessage',needOpenVinylPage:true}
+				}}});
+				if(task && typeof task.catch==='function')task.catch(error=>{playbackError=error;});
 				const end = Date.now() + 15000;
-				while (getCurrentTrackId() !== row.songId && Date.now() < end) await new Promise(resolve => setTimeout(resolve, 150));
-				if (getCurrentTrackId() !== row.songId) throw new Error('客户端尚未切换到这首歌；请手动播放后再进入编辑模式');
+				while (getCurrentTrackId() !== row.songId && !playbackError && Date.now() < end) await new Promise(resolve => setTimeout(resolve, 150));
+				if (getCurrentTrackId() !== row.songId) throw new Error('应用内播放未完成'+(playbackError?'：'+String(playbackError.message||playbackError):'；请检查歌曲是否可播放，或手动播放后进入编辑模式'));
 			}
 			await requireJapaneseTrack(row.songId);
 			await enterEditor(row.songId,row.provider==='local'?null:{...config,externalProvider:row.provider});

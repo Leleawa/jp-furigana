@@ -309,10 +309,10 @@
 		}
 		return candidates.length?candidates:similarLines(needle,permitted);
 	}
-	function segmentsFor(target, groups, mode, fromRomaji) {
+	function resolveSegments(target, groups, mode, fromRomaji, contextKey) {
 		const needle = indexed(target).key;
 		if (!needle) return null;
-		const scopes=groups.context && groups.context.get(needle);
+		const scopes=groups.context && groups.context.get(contextKey || needle);
 		const candidates=[],seen=new Set();
 		for(const scope of scopes || [null]){
 			const found=lineCandidates(needle,groups,scope);
@@ -334,6 +334,35 @@
 		}
 		// Repeated identical text with different readings is ambiguous without timestamps.
 		return versions.size === 1 ? versions.values().next().value : null;
+	}
+	function segmentsFor(target, groups, mode, fromRomaji) {
+		const rubies=core.inlineRubyRanges(target);
+		if(rubies.length) {
+			// Client lyrics may contain 漢字(かな). These kana are an annotation,
+			// not extra sung text: match the base line but retain original offsets.
+			let text='',cursor=0;const hidden=[];
+			for(const r of rubies){text+=target.slice(cursor,r.mid);hidden.push({at:text.length,text:target.slice(r.mid,r.to)});cursor=r.to;}
+			text+=target.slice(cursor);
+			const matched=resolveSegments(text,groups,mode,fromRomaji,indexed(target).key);
+			if(matched) {
+				const output=[];let pos=0,next=0,safe=true;
+				for(const segment of matched) {
+					const end=pos+segment.text.length;let cut=pos;
+					while(next<hidden.length && hidden[next].at<=end) {
+						const h=hidden[next];
+						// Do not guess how to split a website ruby across an inserted note.
+						if(segment.rt && h.at>pos && h.at<end){safe=false;break;}
+						if(h.at>cut)output.push({...segment,text:segment.text.slice(cut-pos,h.at-pos)});
+						output.push({text:h.text,hidden:true});cut=h.at;next++;
+					}
+					if(!safe)break;
+					if(cut<end)output.push({...segment,text:segment.text.slice(cut-pos)});
+					pos=end;
+				}
+				if(safe && next===hidden.length && output.map(s=>s.text).join('')===target)return output;
+			}
+		}
+		return resolveSegments(target,groups,mode,fromRomaji);
 	}
 	function lyricEvidence(lines, record) {
 		const normalize = s => indexed(s).key;
