@@ -171,6 +171,15 @@ const assertScreenshot = (mode = 'hiragana') => {
 	await until(() => readings().includes('アナタ'));
 	assertScreenshot('katakana');
 	assert.equal(requests, count, 'Kana style change reuses disk cache');
+	// 注音字重：默认 400，跟随歌词时用 inherit，且只改样式不重新获取
+	assert.equal(panel.querySelector('[data-k="rtWeight"]').value, '400');
+	win.JPFurigana.set('rtWeight', 'follow');
+	assert(win.document.getElementById('jp-furigana-style').textContent.includes('font-weight: inherit'), 'Follow mode inherits the lyric font weight');
+	assert.equal(panel.querySelector('[data-k="rtWeight"]').value, 'follow');
+	win.JPFurigana.set('rtWeight', '700');
+	assert(win.document.getElementById('jp-furigana-style').textContent.includes('font-weight: 700'));
+	assert.throws(() => win.JPFurigana.set('rtWeight', '900'), /无效的设置选项/);
+	assert.equal(requests, count, 'Weight changes never fetch lyrics');
 	win.JPFurigana.disable();
 	assert.equal(baseText(lyricLines()[0]), original);
 	assert.equal(baseText(lyricLines()[1]), screenshot.target);

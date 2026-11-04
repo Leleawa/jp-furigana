@@ -31,6 +31,7 @@
 		externalConsent: false, // 用户在提示窗口里确认过才会访问外部歌词网站
 		rtSize: 60, // rt 相对底字的百分比
 		rtOpacity: 80, // rt 不透明度百分比
+		rtWeight: '400', // rt 字重：follow = 跟随歌词字重，其余是固定字重
 		karaoke: true, // 逐字歌词：把注音按字符偏移分发到内部的 span，保留逐字动画
 		onlyFirstLine: true, // 一行里只给原文注音，跳过翻译/罗马音
 		skipCredits: true, // 跳过「作词:／编曲:」这类制作信息行
@@ -39,6 +40,9 @@
 		customSelector: '',
 		verbose: false,
 	};
+
+	// 注音字重：follow = 继承歌词本身的字重；其余是固定字重
+	const RT_WEIGHTS = ['follow', '300', '400', '500', '600', '700'];
 
 	// 已知的歌词行选择器，命中即用，比自动检测更稳
 	const KNOWN_SELECTORS = [
@@ -1596,6 +1600,8 @@
 	function updateStyles() {
 		spacingVersion++;
 		resetCalibration(); // 注音字号变了，让位的高度也要重量
+		// 旧配置或手改的值认不出来就退回常规字重，也避免把任意字符串拼进 CSS
+		const weight = RT_WEIGHTS.includes(config.rtWeight) ? config.rtWeight : '400';
 		styleEl('jp-furigana-style').textContent = `
 			.fg-line {
 				display: inline;
@@ -1658,7 +1664,7 @@
 			.fg-line .fg-rt {
 				font-size: ${config.rtSize}%;
 				opacity: ${config.rtOpacity / 100};
-				font-weight: normal;
+				font-weight: ${weight === 'follow' ? 'inherit' : weight};
 				letter-spacing: 0;
 				line-height: 1.1;
 				text-align: center;
@@ -1941,7 +1947,7 @@
 			value = Number(value); if (!Number.isFinite(value)) throw new Error('请输入有效数值');
 			value = Math.max(20, Math.min(100, Math.round(value)));
 		}
-		const choices = { readingSource: ['romaji', 'dict', 'external'], externalProvider: ['auto', 'utaten', 'utanet'], externalAutoRetry: ['off', 'failed'], kana: ['hiragana', 'katakana'] };
+		const choices = { readingSource: ['romaji', 'dict', 'external'], externalProvider: ['auto', 'utaten', 'utanet'], externalAutoRetry: ['off', 'failed'], kana: ['hiragana', 'katakana'], rtWeight: RT_WEIGHTS };
 		if (choices[key] && !choices[key].includes(value)) throw new Error('无效的设置选项');
 		if (key === 'readingSource' && value === 'external' && !config.externalConsent) {
 			// 先弹提示，确认后再真正切过去；取消就保持原来的读音来源
@@ -1954,6 +1960,7 @@
 		if (key === 'enabled') value ? enable() : disable();
 		else if (key === 'externalAutoRetry') { if (externalClient) externalClient.setAutoRetry(value); }
 		else if (NEEDS_RESCAN.includes(key)) rescan();
+		else if (key === 'rtWeight') schedule(0); // 字重改了，注音宽度和行高补偿要重量一次
 		notifyConfigUI();
 		return config[key];
 	}
@@ -2161,6 +2168,17 @@
 				<label>注音不透明度</label>
 				<input type="range" data-k="rtOpacity" min="20" max="100" step="1">
 				<span data-v="rtOpacity"></span>
+			</div>
+			<div class="fg-row">
+				<label>注音字重</label>
+				<select data-k="rtWeight">
+					<option value="follow">跟随歌词</option>
+					<option value="300">细</option>
+					<option value="400">常规</option>
+					<option value="500">中等</option>
+					<option value="600">粗</option>
+					<option value="700">特粗</option>
+				</select>
 			</div>
 
 			<h3>兼容</h3>
