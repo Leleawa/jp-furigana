@@ -137,6 +137,11 @@ if (NO_RUBY) win.localStorage.setItem('jp-furigana.no-ruby', '1');
 const load = (f) => win.eval(fs.readFileSync(path.join(ROOT, 'src', f), 'utf8'));
 load('kuromoji.js');
 load('furigana.js');
+load('ncm-track.js');
+load('locate.js');
+load('layout.js');
+load('probe.js');
+load('config-ui.js');
 load('main.js');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

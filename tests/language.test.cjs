@@ -26,7 +26,7 @@ async function run(rnp) {
 		const trackId=new URL(url).searchParams.get('id');
 		return new Promise((resolve,reject)=>pending.set(trackId,{resolve:json=>resolve({ok:true,json:async()=>json}),reject}));
 	};
-	for(const name of ['furigana.js','external-core.js','user-edits.js','external.js','editor.js','source-dialog.js','rnp-settings.js'])win.eval(fs.readFileSync(path.join(src,name),'utf8'));
+	for(const name of ['furigana.js','ncm-track.js','locate.js','layout.js','external-core.js','user-edits.js','external.js','editor.js','source-dialog.js','rnp-settings.js','probe.js','config-ui.js'])win.eval(fs.readFileSync(path.join(src,name),'utf8'));
 	const record={schema:1,songId:'1',provider:'utaten',url:'https://utaten.com/lyric/pinned/',title:'星の手紙',artists:['あおい'],lines:[{text:original,segments:[{text:'空',rt:'そら'},{text:'をみる'}]}],manualSource:{provider:'utaten',url:'https://utaten.com/lyric/pinned/'}};
 	const cachePath='C:/Test/lyrics/jp-furigana/1.json', originalCache=JSON.stringify(record);files.set(cachePath,originalCache);
 	win.FuriganaExternal.browserTransport=()=>({dataRoot:async()=>'C:/Test',parse:html=>new win.DOMParser().parseFromString(html,'text/html'),fs:{mkdir:async()=>true,exists:async p=>files.has(p),readFileText:async p=>files.get(p),writeFileText:async(p,v)=>{files.set(p,v);return true;}},request:async url=>{

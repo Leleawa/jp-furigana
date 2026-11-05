@@ -34,7 +34,7 @@ win.fetch = async () => ({ ok: true, json: async () => ({
 	lrc: { lyric: texts.map((text, i) => '[00:0' + (i + 1) + ']' + text).join('\n') },
 	romalrc: { lyric: '[00:01]ko i bi to to so ra wo mi ru\n[00:02]a ra ga e nu o ki do u no a n ga ka re wo tsu tsu n da\n[00:03]so ra wo mi ru hi\n[00:04]shu u ma tsu ki wo ku tte ya ru ka ra' }
 }) });
-for (const file of ['furigana.js', 'external-core.js', 'user-edits.js', 'external.js', 'editor.js', 'source-dialog.js', 'rnp-settings.js']) win.eval(fs.readFileSync(path.join(src, file), 'utf8'));
+for (const file of ['furigana.js', 'ncm-track.js', 'locate.js', 'layout.js', 'external-core.js', 'user-edits.js', 'external.js', 'editor.js', 'source-dialog.js', 'rnp-settings.js', 'probe.js', 'config-ui.js']) win.eval(fs.readFileSync(path.join(src, file), 'utf8'));
 win.FuriganaExternal.browserTransport = () => ({
 	dataRoot: async () => 'C:/BetterNCM',
 	fs: { mkdir: async () => true, exists: async p => disk.has(p), readFileText: async p => disk.get(p), readDir:async()=>[...disk.keys()],remove:async p=>disk.delete(p),writeFileText: async (p, value) => { disk.set(p, value); return true; } },

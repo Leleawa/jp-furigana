@@ -33,6 +33,11 @@ const SRC_FILES = [
 	'editor.js',
 	'rnp-settings.js',
 	'source-dialog.js',
+	'ncm-track.js',
+	'locate.js',
+	'layout.js',
+	'probe.js',
+	'config-ui.js',
 	'kuromoji.js',
 	'preview.jpg',
 	// kuromoji 和 IPADIC 的许可要求随附声明，所以这三个也得进包

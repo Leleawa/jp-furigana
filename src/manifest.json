@@ -21,6 +21,15 @@
 				"file": "furigana.js"
 			},
 			{
+				"file": "ncm-track.js"
+			},
+			{
+				"file": "locate.js"
+			},
+			{
+				"file": "layout.js"
+			},
+			{
 				"file": "external-core.js"
 			},
 			{
@@ -37,6 +46,12 @@
 			},
 			{
 				"file": "source-dialog.js"
+			},
+			{
+				"file": "probe.js"
+			},
+			{
+				"file": "config-ui.js"
 			},
 			{
 				"file": "main.js"
