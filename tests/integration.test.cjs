@@ -36,7 +36,7 @@ win.fetch = async () => ({ ok: true, json: async () => ({
 	lrc: { lyric: texts.map((text, i) => '[00:' + String(i + 1).padStart(2,'0') + ']' + text).join('\n') },
 	romalrc: { lyric: '[00:01]ko i bi to to so ra wo mi ru\n[00:02]a ra ga e nu o ki do u no a n ga ka re wo tsu tsu n da\n[00:03]so ra wo mi ru hi\n[00:04]shu u ma tsu ki wo ku tte ya ru ka ra' + '\n[00:'+String(texts.indexOf(parentheses.echo.target)+1).padStart(2,'0')+']'+parentheses.echo.romaji }
 }) });
-for (const file of ['furigana.js', 'external-core.js', 'user-edits.js', 'external.js', 'editor.js', 'source-dialog.js', 'rnp-settings.js']) win.eval(fs.readFileSync(path.join(src, file), 'utf8'));
+for (const file of ['furigana.js', 'ncm-track.js', 'locate.js', 'layout.js', 'external-core.js', 'user-edits.js', 'external.js', 'editor.js', 'source-dialog.js', 'rnp-settings.js', 'probe.js', 'config-ui.js']) win.eval(fs.readFileSync(path.join(src, file), 'utf8'));
 win.FuriganaExternal.browserTransport = () => ({
 	dataRoot: async () => 'C:/BetterNCM',
 	fs: { mkdir: async () => true, exists: async p => disk.has(p), readFileText: async p => disk.get(p), readDir:async()=>[...disk.keys()],remove:async p=>disk.delete(p),writeFileText: async (p, value) => { disk.set(p, value); return true; } },
@@ -187,6 +187,15 @@ const assertScreenshot = (mode = 'hiragana') => {
 	await until(() => readings().includes('アナタ'));
 	assertScreenshot('katakana');
 	assert.equal(requests, count, 'Kana style change reuses disk cache');
+	// 注音字重：默认 400，跟随歌词时用 inherit，且只改样式不重新获取
+	assert.equal(panel.querySelector('[data-k="rtWeight"]').value, '400');
+	win.JPFurigana.set('rtWeight', 'follow');
+	assert(win.document.getElementById('jp-furigana-style').textContent.includes('font-weight: inherit'), 'Follow mode inherits the lyric font weight');
+	assert.equal(panel.querySelector('[data-k="rtWeight"]').value, 'follow');
+	win.JPFurigana.set('rtWeight', '700');
+	assert(win.document.getElementById('jp-furigana-style').textContent.includes('font-weight: 700'));
+	assert.throws(() => win.JPFurigana.set('rtWeight', '900'), /无效的设置选项/);
+	assert.equal(requests, count, 'Weight changes never fetch lyrics');
 	win.JPFurigana.disable();
 	assert.equal(baseText(lyricLines()[0]), original);
 	assert.equal(baseText(lyricLines()[1]), screenshot.target);

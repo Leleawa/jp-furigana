@@ -22,7 +22,7 @@ for (const p of ['README.md','docs/external-lyrics.md','docs/distribution.md']) 
 	const text = fs.readFileSync(path.join(root,p),'utf8');
 	for (const link of text.matchAll(/\]\(([^)]+)\)/g)) if (!/^https?:|^#/.test(link[1])) assert(fs.existsSync(path.resolve(root,path.dirname(p),link[1].split('#')[0])), 'Broken link: ' + link[1]);
 }
-const main = fs.readFileSync(path.join(src,'main.js'),'utf8');
+const main = fs.readFileSync(path.join(src,'main.js'),'utf8'), configUI = fs.readFileSync(path.join(src,'config-ui.js'),'utf8');
 for (const name of fs.readdirSync(src)) {
 	assert(!/\.(ps1|exe|dll)$/i.test(name), 'No shell or native runtime component: '+name);
 	if (/\.js$/i.test(name) && name !== 'kuromoji.js') {
@@ -30,7 +30,7 @@ for (const name of fs.readdirSync(src)) {
 		assert(!/app\s*\.\s*exec\s*\(|EncodedCommand|powershell|curl\.exe|child_process/i.test(code), 'No process launch chain: '+name);
 	}
 }
-assert(main.includes('betterncm.ncm.openUrl')); assert(main.includes('反馈问题')); assert(main.includes('源码仓库'));
+assert(main.includes('betterncm.ncm.openUrl')); assert(configUI.includes('反馈问题')); assert(configUI.includes('源码仓库'));
 assert(main.includes("const REPO_URL = 'https://github.com/Leleawa/jp-furigana'"));
 assert(main.includes('window.JPFurigana ='));assert(!main.includes('tree/standalone'));
 console.log('Store checks passed: upstream identity, optional adapters, version, restart, small preview, license copies, no desktop/process components, support links and documentation.');
