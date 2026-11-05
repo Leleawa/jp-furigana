@@ -30,8 +30,9 @@
 	const LATIN = 'A-Za-z0-9Ａ-Ｚａ-ｚ０-９';
 	const RE_LATIN_RUN = new RegExp(`[${LATIN}](?:[${LATIN}\\s'’.,!?&\\-]*[${LATIN}])?`, 'g');
 	// 歌词里的括号：作词者自带的注音「漢字（かな）」，或者和声、注释
-	// 底字可以带前导数字：「10年後(じゅうねんご)」
-	const RE_INLINE_RUBY = new RegExp(`([0-9０-９]*[${KANJI}]+)[（(]([ぁ-ゖァ-ヺー・]+)[）)]`, 'g');
+	// Candidates only: kana parentheses are not automatically ruby (choruses
+	// can have the same shape). Confirm them against the preceding pronunciation.
+	const RE_RUBY_BASE = new RegExp(`[0-9０-９]*[${KANJI}][${KANJI}ぁ-ゖァ-ヺー]*$`);
 	const RE_PAREN = /[（(][^（）()]*[）)]/g;
 
 	function toHiragana(s) {
@@ -524,7 +525,7 @@
 	 * @param {string} reading       整行读音（假名，可以带 UNKNOWN 占位符）
 	 * @param {Array}  dictSegments  tokensToSegments 的结果，只读
 	 */
-	function segmentsFromReading(text, reading, dictSegments, opts) {
+	function alignFromReading(text, reading, dictSegments, opts, allowSkip = true) {
 		opts = opts || {};
 		if (!RE_HAS_KANJI.test(text) || !dictSegments || !dictSegments.length) return null;
 		const kanaFn = opts.kana === 'katakana' ? toKatakana : toHiragana;
@@ -535,7 +536,7 @@
 		const masked = dictSegments.map((s) => (s.hidden ? ' '.repeat(s.text.length) : s.text)).join('');
 		const parens = [...masked.matchAll(RE_PAREN)].map((m) => [m.index, m.index + m[0].length]);
 
-		for (const skipParen of parens.length ? [false, true] : [false]) {
+		for (const skipParen of allowSkip && parens.length ? [false, true] : [false]) {
 			for (const latin of reading.includes(UNKNOWN) ? [true, false] : [false]) {
 				const segs = fillFromReading(slots, reading, skipParen ? parens : [], latin);
 				if (!segs) continue;
@@ -544,6 +545,19 @@
 			}
 		}
 		return null;
+	}
+	function segmentsFromReading(text, reading, dictSegments, opts = {}) {
+		if (!dictSegments || !dictSegments.length) return null;
+		const candidates=inlineRubyRanges(text);
+		if (!candidates.length) return alignFromReading(text,reading,dictSegments,opts);
+		// A previous dictionary pass may have hidden a duplicate-looking chorus.
+		// Reconsider it with the whole supplied reading before hiding anything.
+		const literal=dictSegments.map(s=>{const p={...s};delete p.hidden;delete p.fixed;return p;});
+		const notes=inlineRubyRanges(text,literal);
+		const selected=selectInlineVariant(literal,notes,reading,opts,true);
+		if(selected)return selected;
+		const aligned=alignFromReading(text,reading,literal,opts);
+		return aligned&&normalizeInlineRuby(aligned,{...opts,reading});
 	}
 
 	/** Unknown kanji still consume the supplied reading; do not treat them as kana.
@@ -1028,46 +1042,134 @@
 			}
 		}
 
-		return applyInlineRuby(out, kana);
+		return opts.inlineRuby === false ? out : normalizeInlineRuby(out, opts);
 	}
 
-	/**
-	 * 作词者自己写的注音「漢字（かな）」：括号前的整段汉字直接用括号里的读音（fixed），
-	 * 括号本身留在片段里但标成 hidden，渲染时藏起来——片段拼起来仍然等于原文，
-	 * 逐字歌词按下标切分不受影响。
-	 */
-	function inlineRubyRanges(text) {
-		return [...text.matchAll(RE_INLINE_RUBY)].map(m => ({
-			from:m.index, mid:m.index+m[1].length, to:m.index+m[0].length, rt:m[2].replace(/・/g,'')
-		}));
+	// Ignore formatting differences only in pronunciation comparisons. All text
+	// and UTF-16 offsets in the returned segments remain exactly as supplied.
+	function pronunciation(value) {
+		const text=toKatakana(String(value).normalize('NFKC')).replace(/[\s\p{P}\p{S}]/gu,'');
+		return /^[ァ-ヺー]*$/.test(text) ? text : null;
 	}
-	function applyInlineRuby(segs, kanaFn) {
-		const text = segs.map((s) => s.text).join('');
-		// 带注音的片段内部不能切（copySegments 只切不带注音的），落在里面的括号注音就不认了
-		const inside = new Set();
-		let pos = 0;
-		for (const s of segs) {
-			if (s.rt) for (let i = pos + 1; i < pos + s.text.length; i++) inside.add(i);
-			pos += s.text.length;
+	function positioned(segments) {
+		let at=0;return segments.map(s=>{const p={s,start:at,end:at+s.text.length};at=p.end;return p;});
+	}
+	function readingBefore(segments, end, reading, minimum=0) {
+		const want=pronunciation(reading);if(!want)return null;
+		const units=positioned(segments);let spoken='',hasKanji=false;
+		for(let i=units.length-1;i>=0;i--) {
+			const {s,start,end:to}=units[i];if(start>=end)continue;if(to<=minimum)break;
+			if(start<minimum || s.rt && to>end)return null;
+			const text=s.text.slice(0,Math.min(to,end)-start);
+			const part=s.hidden?'':pronunciation(s.rt||text);if(part===null)return null;
+			spoken=part+spoken;hasKanji=hasKanji||RE_HAS_KANJI.test(text);
+			if(spoken===want && hasKanji)return start;
+			if(spoken.length>want.length || end-start>256)break;
 		}
-		const rubies = inlineRubyRanges(text)
-			.filter((r) => !inside.has(r.from) && !inside.has(r.mid) && !inside.has(r.to));
-		if (!rubies.length) return segs;
-
-		const out = [];
-		for (const p of copySegments(segs, rubies.flatMap((r) => [r.from, r.mid, r.to]))) {
-			const r = rubies.find((x) => p.start >= x.from && p.start < x.to);
-			if (!r) {
-				const last = out[out.length - 1];
-				if (!p.rt && last && !last.rt && !last.hidden) last.text += p.text;
-				else out.push(stripSegment(p));
-			} else if (p.start === r.from) {
-				out.push({ text: text.slice(r.from, r.mid), rt: kanaFn(toKatakana(r.rt)), at: r.from, fixed: true });
-			} else if (p.start === r.mid) {
-				out.push({ text: text.slice(r.mid, r.to), hidden: true });
+		return null;
+	}
+	function inlineRubyRanges(text, segments) {
+		const output=[],units=segments&&positioned(segments);
+		for(const m of text.matchAll(RE_PAREN)) {
+			const rt=toHiragana(m[0].slice(1,-1).normalize('NFKC').replace(/[\s・]/g,''));
+			if(!rt || !/^[ぁ-ゖァ-ヺー]+$/.test(rt) || rt.length>256)continue;
+			const prefix=text.slice(0,m.index).replace(/\s+$/u,''),base=RE_RUBY_BASE.exec(prefix);
+			if(!base)continue;
+			const r={from:base.index,mid:prefix.length,open:m.index,to:m.index+m[0].length,rt,confirmed:false};
+			if(segments) {
+				const from=readingBefore(segments,r.mid,rt,r.from);
+				if(from!==null){r.from=from;r.confirmed=true;}
+				else {
+					// An irregular reading needs whole-line evidence. Limit its base to
+					// the nearest dictionary kanji unit, rather than the entire phrase.
+					const last=units.filter(p=>p.start>=r.from&&p.end<=r.mid&&RE_HAS_KANJI.test(p.s.text)).pop();
+					if(last)r.from=last.start;
+				}
 			}
+			output.push(r);
 		}
-		return out;
+		return output;
+	}
+	function inlineRubyVariants(notes) {
+		// Usual lyric lines contain one or two notes. Bound unusual input instead
+		// of growing an exponential search on long user-provided lines.
+		if(notes.length>6)return [[],notes.filter(r=>r.confirmed)];
+		const choices=[];
+		for(let mask=0;mask<(1<<notes.length);mask++)choices.push(notes.filter((_,i)=>mask&(1<<i)));
+		return choices.sort((a,b)=>a.length-b.length);
+	}
+	function applyRubyRanges(segs,ranges,opts={}) {
+		if(!ranges.length)return segs.map(s=>({...s}));
+		const text=segs.map(s=>s.text).join(''),inside=new Set();let at=0;
+		for(const s of segs){if(s.rt)for(let i=at+1;i<at+s.text.length;i++)inside.add(i);at+=s.text.length;}
+		const preserve=!!opts.preserveReadings,kanaFn=opts.kana==='katakana'?toKatakana:toHiragana;
+		const notes=ranges.filter(r=>!inside.has(r.mid)&&!inside.has(r.to)&&(preserve||!inside.has(r.from)));
+		if(notes.length!==ranges.length)return null;
+		const out=[];
+		for(const p of copySegments(segs,notes.flatMap(r=>preserve?[r.mid,r.to]:[r.from,r.mid,r.to]))) {
+			const r=notes.find(r=>p.start>=(preserve?r.mid:r.from)&&p.start<r.to);
+			if(!r)out.push(stripSegment(p));
+			else if(!preserve&&p.start===r.from)out.push({text:text.slice(r.from,r.mid),rt:kanaFn(toKatakana(r.rt)),at:r.from,fixed:true});
+			else if(p.start===r.mid)out.push({text:text.slice(r.mid,r.to),hidden:true});
+		}
+		return out.map(s=>s.text).join('')===text?out:null;
+	}
+	function matchesReading(segments, reading) {
+		const wanted=pronunciation(reading);if(wanted===null)return false;let pattern='';
+		for(const s of segments) {
+			if(s.hidden)continue;
+			const part=pronunciation(s.rt||s.text);if(part===null)return false;
+			let escaped=escapeRe(part);
+			// Particle spellings vary in romanization; a kanji word's supplied
+			// pronunciation must still match exactly (花 is not わな).
+			if(!s.rt)escaped=escaped.replace(/ハ/g,'[ハワ]').replace(/ヘ/g,'[ヘエ]').replace(/ヲ/g,'[ヲオ]').replace(/ヂ/g,'[ヂジ]').replace(/ヅ/g,'[ヅズ]');
+			pattern+=escaped;
+		}
+		return new RegExp('^'+pattern+'$').test(wanted);
+	}
+	function selectInlineVariant(segments, notes, reading, opts, align) {
+		const wanted=pronunciation(reading);if(!wanted)return null;
+		const text=segments.map(s=>s.text).join(''),found=[];let best=Infinity;
+		for(const selected of inlineRubyVariants(notes)) {
+			if(selected.length>best)break;
+			const draft=applyRubyRanges(segments,selected,opts);if(!draft)continue;
+			let result=draft;
+			if(!matchesReading(result,reading)) {
+				if(!align)continue;
+				result=alignFromReading(text,reading,draft,opts,false);
+				if(!result||!matchesReading(result,reading))continue;
+			}
+			if(!selected.length)return result; // the parentheses are sung: retain them
+			best=selected.length;found.push({selected,result});
+		}
+		if(!found.length)return null;
+		const common=found[0].selected.filter(r=>found.every(v=>v.selected.includes(r)));
+		// If equal readings fit different places, do not arbitrarily hide one.
+		return common.length===best?found[0].result:applyRubyRanges(segments,common,opts);
+	}
+	function resolveInlineRubyReading(segments,reading,opts={}) {
+		const literal=segments.map(s=>{const p={...s};delete p.hidden;delete p.fixed;return p;});
+		return selectInlineVariant(literal,inlineRubyRanges(literal.map(s=>s.text).join(''),literal),reading,opts,true);
+	}
+	function normalizeInlineRuby(segments, opts={}) {
+		const text=segments.map(s=>s.text).join('');if(!/[（(]/.test(text))return segments;
+		const units=positioned(segments);
+		const fallback=opts.proofSegments&&inlineRubyRanges(text,opts.proofSegments);
+		const notes=inlineRubyRanges(text,segments).map(r=>r.confirmed?r:fallback&&fallback.find(p=>p.confirmed&&p.mid===r.mid&&p.to===r.to)||r).filter(r=>
+			!units.some(p=>p.s.hidden&&p.start<=r.mid&&p.end>=r.to));
+		if(!notes.length)return segments;
+		if(opts.reading) {
+			if(opts.proofSegments) {
+				const guided=resolveInlineRubyReading(opts.proofSegments,opts.reading,opts);
+				if(guided) {
+					const hidden=positioned(guided).filter(p=>p.s.hidden);
+					return applyRubyRanges(segments,notes.filter(r=>r.confirmed&&hidden.some(p=>p.start<=r.mid&&p.end>=r.to)),opts)||segments;
+				}
+			}
+			const selected=selectInlineVariant(segments,notes.filter(r=>r.confirmed),opts.reading,opts,false);
+			if(selected)return selected;
+		}
+		return applyRubyRanges(segments,notes.filter(r=>r.confirmed),opts)||segments;
 	}
 
 	// Original YRC text is also needed for language detection and line matching.
@@ -1110,5 +1212,9 @@
 		hasJapaneseLyrics,
 		buildRomajiMap,
 		inlineRubyRanges,
+		inlineRubyVariants,
+		readingBefore,
+		normalizeInlineRuby,
+		resolveInlineRubyReading,
 	};
 });

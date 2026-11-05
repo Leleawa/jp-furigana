@@ -29,7 +29,7 @@ const LINES = [
 	['思い', 'で', 'は', 'せめて', 'もの', '慰め'],
 	['いつ', 'まで', 'も', 'あなた', 'は', 'ここ', 'に', 'いる'], // 没汉字，应当不动
 	['まだ', '最', '初', 'は'], // yrc 常把汉字一字一切，「最初」的读音跨了两个 span
-	['宇宙', '(そら)', 'を', '見る'], // 作词者自带注音：括号藏起来，读音挂到汉字上
+	['扉', '（とびら ）', 'を', '見る'], // 作词者自带注音：括号藏起来，读音挂到汉字上
 	['二', '人', 'が', '出', '會', 'っ', 'た', '日'], // 用户截图：旧字跨逐字宿主
 	['凜', 'と', '戀', '人', 'を', '射', 'ち', '墮', 'と', 'す'],
 ];
@@ -233,14 +233,14 @@ function check(ok, label, detail) {
 
 	const inline = karaoke[5];
 	const hide = inline.querySelector('.fg-hide');
-	check(hide && hide.style.display === 'none' && hide.textContent === '(そら)', '自带注音的括号被藏起来了');
+	check(hide && hide.style.display === 'none' && hide.textContent === '（とびら ）', '自带注音的括号被藏起来了');
 	check(
-		[...inline.querySelectorAll('.fg-ruby')].some((h) => baseText(h) === '宇宙' && h.querySelector('.fg-rt').textContent === 'そら'),
+		[...inline.querySelectorAll('.fg-ruby')].some((h) => baseText(h) === '扉' && h.querySelector('.fg-rt').textContent === 'とびら'),
 		'括号里的读音挂到了汉字上'
 	);
 	const inlineBody = inline.cloneNode(true);
 	inlineBody.querySelectorAll('.fg-rt, .rnp-karaoke-word-filler').forEach((el) => el.remove());
-	check(inlineBody.textContent === '宇宙(そら)を見る', '藏起来的括号仍在 DOM 里，原文没少', inlineBody.textContent);
+	check(inlineBody.textContent === '扉（とびら ）を見る', '藏起来的括号仍在 DOM 里，原文没少', inlineBody.textContent);
 
 	check(
 		[...win.document.querySelectorAll('.rnp-lyrics-line-original')].every(

@@ -13,11 +13,11 @@
 
 	const LOG = '[jp-furigana]';
 	// 改了实现就换一下，方便确认插件到底有没有被重新加载（JPFurigana.build）
-	const BUILD = '1.2.0-manager-fixes';
+	const BUILD = '1.2.0-parentheses-fixes';
 	const REPO_URL = 'https://github.com/Leleawa/jp-furigana';
 	const CONFIG_KEY = 'jp-furigana.config';
 	// 注音算法改了就换 key，让旧缓存自然失效
-	const CACHE_KEY = 'jp-furigana.cache.v4';
+	const CACHE_KEY = 'jp-furigana.cache.v5';
 	const CACHE_LIMIT = 4000;
 
 	const DEFAULTS = {
@@ -201,6 +201,7 @@
 	const cache = new Map();
 	try {
 		localStorage.removeItem('jp-furigana.cache.v3'); // obsolete results could include missing readings
+		localStorage.removeItem(CACHE_KEY.replace(/v5$/,'v4'));
 		const raw = JSON.parse(localStorage.getItem(CACHE_KEY));
 		if (raw && typeof raw === 'object')
 			for (const k of Object.keys(raw)) cache.set(k, raw[k]);
@@ -242,12 +243,13 @@
 		}
 	}
 
-	function getSegments(text) {
-		const key = 'd|' + config.kana + '|' + text;
+	function getSegments(text, raw = false) {
+		const key = (raw?'raw|':'d|') + config.kana + '|' + text;
 		const hit = cache.get(key);
 		if (hit) return hit;
 		const segs = FuriganaCore.tokensToSegments(FuriganaCore.tokenizeForReading(state.tokenizer, text), {
 			kana: config.kana,
+			inlineRuby: !raw,
 		});
 		cache.set(key, segs);
 		cacheDirty = true;
@@ -261,7 +263,7 @@
 		const kana = FuriganaCore.romajiToKana(romaji);
 		// 结构取自词典分词，读音取自音译；见 furigana.js 的 segmentsFromReading
 		const segs = kana
-			? FuriganaCore.segmentsFromReading(text, kana, getSegments(text), {
+			? FuriganaCore.segmentsFromReading(text, kana, getSegments(text, true), {
 					kana: config.kana,
 			  })
 			: null;
@@ -492,6 +494,11 @@
 			externalClient = FuriganaExternal.create({
 				...FuriganaExternal.browserTransport(betterncm, plugin),
 				originalLines:currentOriginalLines,
+				reading:text=>{
+					const romaji=state.apiRomaji&&state.apiRomaji.get(FuriganaCore.lyricKey(text));
+					return romaji&&FuriganaCore.romajiToKana(romaji);
+				},
+				proofSegments:text=>state.tokenizer?getSegments(text,true):null,
 				lyrics: async id => {
 					if (state.evidence && state.evidence.songId === id) return state.evidence.lines;
 					const abort = new AbortController(), timer = setTimeout(() => abort.abort(), 8000);

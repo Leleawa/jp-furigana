@@ -309,13 +309,22 @@
 		}
 		return candidates.length?candidates:similarLines(needle,permitted);
 	}
-	function resolveSegments(target, groups, mode, fromRomaji, contextKey) {
+	function exactLineCandidates(needle,groups,scope) {
+		if(!groups.exact) {
+			groups.exact=new Map();
+			for(const g of groups){if(!groups.exact.has(g.key))groups.exact.set(g.key,[]);groups.exact.get(g.key).push(g);}
+		}
+		return (groups.exact.get(needle)||[]).filter(g=>!scope || (scope.confirmed ?
+			g.start===scope.first&&g.start+g.count===scope.last :
+			g.start>=scope.first&&g.start+g.count<=scope.last)).map(g=>({g,at:0}));
+	}
+	function resolveSegments(target, groups, mode, fromRomaji, contextKey, exactOnly=false) {
 		const needle = indexed(target).key;
 		if (!needle) return null;
 		const scopes=groups.context && groups.context.get(contextKey || needle);
 		const candidates=[],seen=new Set();
 		for(const scope of scopes || [null]){
-			const found=lineCandidates(needle,groups,scope);
+			const found=exactOnly?exactLineCandidates(needle,groups,scope):lineCandidates(needle,groups,scope);
 			if(!found.length)return null;
 			for(const candidate of found){const id=[candidate.g.start,candidate.g.count,candidate.at,!!candidate.mapped].join('|');if(!seen.has(id)){seen.add(id);candidates.push(candidate);}}
 		}
@@ -335,35 +344,64 @@
 		// Repeated identical text with different readings is ambiguous without timestamps.
 		return versions.size === 1 ? versions.values().next().value : null;
 	}
-	function segmentsFor(target, groups, mode, fromRomaji) {
-		const rubies=core.inlineRubyRanges(target);
-		if(rubies.length) {
-			// Client lyrics may contain 漢字(かな). These kana are an annotation,
-			// not extra sung text: match the base line but retain original offsets.
-			let text='',cursor=0;const hidden=[];
-			for(const r of rubies){text+=target.slice(cursor,r.mid);hidden.push({at:text.length,text:target.slice(r.mid,r.to)});cursor=r.to;}
-			text+=target.slice(cursor);
-			const matched=resolveSegments(text,groups,mode,fromRomaji,indexed(target).key);
-			if(matched) {
-				const output=[];let pos=0,next=0,safe=true;
-				for(const segment of matched) {
-					const end=pos+segment.text.length;let cut=pos;
-					while(next<hidden.length && hidden[next].at<=end) {
-						const h=hidden[next];
-						// Do not guess how to split a website ruby across an inserted note.
-						if(segment.rt && h.at>pos && h.at<end){safe=false;break;}
-						if(h.at>cut)output.push({...segment,text:segment.text.slice(cut-pos,h.at-pos)});
-						output.push({text:h.text,hidden:true});cut=h.at;next++;
-					}
-					if(!safe)break;
-					if(cut<end)output.push({...segment,text:segment.text.slice(cut-pos)});
-					pos=end;
-				}
-				if(safe && next===hidden.length && output.map(s=>s.text).join('')===target)return output;
+	function restoreInlineNotes(target, matched, removed) {
+		const hidden=[];let delta=0;
+		for(const r of removed){hidden.push({at:r.mid-delta,text:target.slice(r.mid,r.to)});delta+=r.to-r.mid;}
+		const output=[];let pos=0,next=0;
+		for(const segment of matched) {
+			const end=pos+segment.text.length;let cut=pos;
+			while(next<hidden.length&&hidden[next].at<=end) {
+				const h=hidden[next];if(segment.rt&&h.at>pos&&h.at<end)return null;
+				if(h.at>cut)output.push({...segment,text:segment.text.slice(cut-pos,h.at-pos)});
+				output.push({text:h.text,hidden:true});cut=h.at;next++;
+			}
+			if(cut<end)output.push({...segment,text:segment.text.slice(cut-pos)});pos=end;
+		}
+		if(next!==hidden.length||output.map(s=>s.text).join('')!==target)return null;
+		// Text similarity alone must not erase a chorus. Require either the
+		// website reading or an independently confirmed dictionary annotation.
+		// A website's special reading still wins over a conventional inline note.
+		const confirmed=core.inlineRubyRanges(target,output).filter(r=>r.confirmed);
+		if(!removed.every(r=>r.confirmed||confirmed.some(c=>c.mid===r.mid&&c.to===r.to)))return null;
+		return output;
+	}
+	function segmentsFor(target, groups, mode, fromRomaji, options={}) {
+		const normalize=result=>result&&core.normalizeInlineRuby(result,{...options,kana:mode,preserveReadings:true});
+		const candidates=core.inlineRubyRanges(target,options.proofSegments);
+		if(!candidates.length)return normalize(resolveSegments(target,groups,mode,fromRomaji));
+		let notes=candidates;
+		if(options.reading&&options.proofSegments) {
+			const guided=core.resolveInlineRubyReading(options.proofSegments,options.reading,{kana:mode});
+			if(guided) {
+				let at=0;const hidden=[];for(const s of guided){if(s.hidden)hidden.push([at,at+s.text.length]);at+=s.text.length;}
+				notes=notes.filter(r=>hidden.some(([a,b])=>a<=r.mid&&b>=r.to));
 			}
 		}
-		return resolveSegments(target,groups,mode,fromRomaji);
+		const views=core.inlineRubyVariants(notes).map(removed=>{
+			let text='',cursor=0;for(const r of removed){text+=target.slice(cursor,r.mid);cursor=r.to;}text+=target.slice(cursor);
+			return {removed,text};
+		});
+		const contextKey=indexed(target).key;
+		let best=Infinity;const results=new Map();
+		for(const view of views) {
+			if(view.removed.length>best)break;
+			const matched=resolveSegments(view.text,groups,mode,fromRomaji,contextKey,true);
+			const result=matched&&restoreInlineNotes(target,matched,view.removed);
+			if(result){best=view.removed.length;results.set(JSON.stringify(result),result);}
+		}
+		if(results.size)return results.size===1?normalize(results.values().next().value):null;
+		// Approximate line matching remains bounded: do not run the spelling
+		// alignment once for every possible parenthesis combination.
+		for(const removed of [notes.filter(r=>r.confirmed),notes]) {
+			if(!removed.length)continue;
+			const view=views.find(v=>v.removed.length===removed.length&&v.removed.every(r=>removed.includes(r)));
+			if(!view)continue;
+			const matched=resolveSegments(view.text,groups,mode,fromRomaji,contextKey);
+			const result=matched&&restoreInlineNotes(target,matched,removed);if(result)return normalize(result);
+		}
+		return normalize(resolveSegments(target,groups,mode,fromRomaji));
 	}
+
 	function lyricEvidence(lines, record) {
 		const normalize = s => indexed(s).key;
 		const targets = [...new Set((lines || []).filter(s => typeof s === 'string' && !/作詞|作曲|編曲|作词|作曲|编曲|lyrics|composer|arrang/i.test(s)).map(normalize))].filter(s => s.length >= 8 && /[ぁ-ゖァ-ヶ一-龯]/.test(s));

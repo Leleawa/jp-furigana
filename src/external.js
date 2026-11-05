@@ -210,6 +210,7 @@
 		}
 		let originalLines = null;
 		const originals = () => deps.originalLines ? deps.originalLines(currentId) : null;
+		const inlineOptions=text=>/[（(]/.test(text)?{reading:deps.reading&&deps.reading(text),proofSegments:deps.proofSegments&&deps.proofSegments(text)}:{};
 		function accept(record, cached, g, cacheWarning = '', preserveRequest = false) {
 			if (!alive(g)) return;
 			if (!preserveRequest) { lastError = ''; warning = cacheWarning; }
@@ -376,10 +377,10 @@
 			if (!current || source === 'local') return null;
 			const next=originals();
 			if(next!==originalLines){originalLines=next;groups=core.prepare(current,originalLines);lineCache.clear();}
-			const k = mode + '|' + text;
+			const options=inlineOptions(text),k = mode + '|' + (options.reading||'') + '|' + text;
 			if (!lineCache.has(k)) {
 				if (lineCache.size > 1000) lineCache.clear();
-				lineCache.set(k, edits.annotate(current, text, core.segmentsFor(text, groups, mode, fromRomaji), mode));
+				lineCache.set(k, edits.annotate(current, text, core.segmentsFor(text, groups, mode, fromRomaji, options), mode));
 			}
 			return lineCache.get(k);
 		}
@@ -419,7 +420,7 @@
 				const { raw, record } = await read(path, anchor.songId);
 				const local = anchor.provider === 'local';
 				const baseline = edits.annotate(local ? { ...record, provider: 'local', url: '' } : record, anchor.line,
-					local ? fallback(anchor.line) : core.segmentsFor(anchor.line, core.prepare(record,originals()), 'hiragana', fromRomaji), 'hiragana');
+					local ? fallback(anchor.line) : core.segmentsFor(anchor.line, core.prepare(record,originals()), 'hiragana', fromRomaji,inlineOptions(anchor.line)), 'hiragana');
 				const match = baseline && baseline.find(s => s.edit && edits.key(s.edit) === edits.key(anchor));
 				if (!match || match.edit.reading !== anchor.reading) throw new Error('本地读音已变化，请取消后重新打开编辑框');
 				const next = edits.update(record, anchor, value);

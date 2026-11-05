@@ -11,7 +11,7 @@ const pairs = segments => segments.filter(s => s.rt).map(s => [s.text, s.rt]);
 // Minimal user reproduction: the kana in parentheses are client-side ruby,
 // not additional lyric text; all three website readings must still be used.
 const inlineLine={text:'思春期 疵口 胸のうち',segments:[{text:'思春期',rt:'ししゅんき'},{text:' '},{text:'疵口',rt:'きずぐち'},{text:' '},{text:'胸',rt:'むね'},{text:'のうち'}]};
-for(const target of ['思春期疵口(きずぐち)胸のうち','思春期疵口（キズグチ）胸のうち','思春期(べつ)疵口(よみ)胸(あやまり)のうち']) {
+for(const target of ['思春期疵口(きずぐち)胸のうち','思春期疵口（キズグチ）胸のうち','思春期(ししゅんき)疵口(きずぐち)胸(むね)のうち']) {
 	for(const mode of ['hiragana','katakana']) {
 		const result=core.segmentsFor(target,core.prepare({provider:'utaten',lines:[inlineLine]},[target]),mode);
 		assert(result,'Inline client ruby must not make a known website line fall back');

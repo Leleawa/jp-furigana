@@ -6,9 +6,10 @@ const screenshot = require('./fixtures/utaten-confusions.cjs');
 const weekend = require('./fixtures/utaten-weekend.cjs');
 const alternates = require('./fixtures/utaten-alternates.cjs');
 const inlineRuby = require('./fixtures/utaten-inline-ruby.cjs');
+const parentheses = require('./fixtures/parentheses.cjs');
 const rnp = process.argv.includes('rnp');
 const original = '恋人と空をみる';
-const texts = [original, screenshot.target, '空をみる日', weekend.target, alternates.target,...alternates.context.map(l=>l.target||l.text),inlineRuby.target];
+const texts = [original, screenshot.target, '空をみる日', weekend.target, alternates.target,...alternates.context.map(l=>l.target||l.text),inlineRuby.target,parentheses.mixed.target,parentheses.echo.target];
 const native = '<ul class="lyric">' + texts.map(text => '<li class="line"><p>' + text + '</p><p class="translation">保留原来的中文翻译</p></li>').join('') + '</ul>';
 const karaoke = '<div id="rnp-view"><div class="rnp-lyrics">' + texts.map(text => '<div class="rnp-lyrics-line"><div class="rnp-lyrics-line-karaoke">' +
 	[...text].map(c => '<div class="rnp-karaoke-word" style="display:inline-block"><span>' + c + '</span><span class="rnp-karaoke-word-filler">' + c + '</span></div>').join('') +
@@ -23,7 +24,7 @@ win.document.getElementById('root').__reactContainer$test = { memoizedProps: { s
 win.plugin = { pluginPath: src, devMode: false, onLoad: f => handlers.load = f, onConfig: f => handlers.config = f };
 win.betterncm = { app: { getBetterNCMVersion: async () => '1.3.4' }, ncm: { openUrl(url) { assert(!/^orpheus:/.test(url),'Playing a cached song must never invoke an OS protocol handler'); } }, fs: { exists: async () => true } };
 win.kuromoji = { builder: () => ({ build: cb => cb(null, { tokenize: text => {
-	const words = [['恋人', 'コイビト'], ['空', 'ソラ'], ['日', 'ヒ'], ['抗', 'アラガ'], ['沖動', 'オキドウ'], ['暗', 'アン'], ['彼', 'カレ'], ['包', 'ツツ'], ['終末','シュウマツ'], ['旗','キ'], ['送','ク']];
+	const words = [['恋人', 'コイビト'], ['空', 'ソラ'], ['日', 'ヒ'], ['抗', 'アラガ'], ['沖動', 'オキドウ'], ['暗', 'アン'], ['彼', 'カレ'], ['包', 'ツツ'], ['終末','シュウマツ'], ['旗','キ'], ['送','ク'],['扉','トビラ'],['進','スス'],['君','キミ'],['声','コエ'],['星','ホシ']];
 	const tokens = [];
 	for (let at = 0; at < text.length;) {
 		const [surface_form, reading] = words.find(([word]) => text.startsWith(word, at)) || [text[at], text[at]];
@@ -32,8 +33,8 @@ win.kuromoji = { builder: () => ({ build: cb => cb(null, { tokenize: text => {
 	return tokens;
 } }) }) };
 win.fetch = async () => ({ ok: true, json: async () => ({
-	lrc: { lyric: texts.map((text, i) => '[00:0' + (i + 1) + ']' + text).join('\n') },
-	romalrc: { lyric: '[00:01]ko i bi to to so ra wo mi ru\n[00:02]a ra ga e nu o ki do u no a n ga ka re wo tsu tsu n da\n[00:03]so ra wo mi ru hi\n[00:04]shu u ma tsu ki wo ku tte ya ru ka ra' }
+	lrc: { lyric: texts.map((text, i) => '[00:' + String(i + 1).padStart(2,'0') + ']' + text).join('\n') },
+	romalrc: { lyric: '[00:01]ko i bi to to so ra wo mi ru\n[00:02]a ra ga e nu o ki do u no a n ga ka re wo tsu tsu n da\n[00:03]so ra wo mi ru hi\n[00:04]shu u ma tsu ki wo ku tte ya ru ka ra' + '\n[00:'+String(texts.indexOf(parentheses.echo.target)+1).padStart(2,'0')+']'+parentheses.echo.romaji }
 }) });
 for (const file of ['furigana.js', 'external-core.js', 'user-edits.js', 'external.js', 'editor.js', 'source-dialog.js', 'rnp-settings.js']) win.eval(fs.readFileSync(path.join(src, file), 'utf8'));
 win.FuriganaExternal.browserTransport = () => ({
@@ -47,7 +48,7 @@ win.FuriganaExternal.browserTransport = () => ({
 		assert.equal(new URL(url).hostname, 'utaten.com', 'UtaTen-only must never request Uta-Net');
 		if (url.includes('/search')) return '<table><tr><td class="searchResult__title"><a href="/lyric/test001/">星の手紙</a></td><td class="searchResult__artist"><p><a>試験歌手</a></p></td></tr></table>';
 		await new Promise(resolve => { pending = resolve; });
-		return '<h2 class="newLyricTitle__main">星の手紙<span>歌詞</span></h2><h3><a href="/artist/1">試験歌手</a></h3><div class="lyricBody"><div class="hiragana"><span class="ruby"><span class="rb">恋人</span><span class="rt">あなた</span></span>と<span class="ruby"><span class="rb">空</span><span class="rt">そら</span></span>をみる<br>' + [screenshot.html,weekend.html,alternates.html,...alternates.context.map(l=>l.html),inlineRuby.html].join('<br>') + '</div></div>';
+		return '<h2 class="newLyricTitle__main">星の手紙<span>歌詞</span></h2><h3><a href="/artist/1">試験歌手</a></h3><div class="lyricBody"><div class="hiragana"><span class="ruby"><span class="rb">恋人</span><span class="rt">あなた</span></span>と<span class="ruby"><span class="rb">空</span><span class="rt">そら</span></span>をみる<br>' + [screenshot.html,weekend.html,alternates.html,...alternates.context.map(l=>l.html),inlineRuby.html,parentheses.mixed.html,parentheses.echo.html].join('<br>') + '</div></div>';
 	}
 });
 win.localStorage.setItem('jp-furigana.config', JSON.stringify({ readingSource: 'external', externalProvider: 'utaten', externalConsent: true }));
@@ -58,7 +59,16 @@ const lyricLines = () => [...win.document.querySelectorAll(rnp ? '.rnp-lyrics-li
 const readings = (i = 0) => [...lyricLines()[i].querySelectorAll('.fg-rt')].map(n => n.textContent);
 const baseText = element => { const copy = element.cloneNode(true); for (const n of copy.querySelectorAll('.fg-rt,rt,.rnp-karaoke-word-filler')) n.remove(); return copy.textContent; };
 const assertScreenshot = (mode = 'hiragana') => {
-	const inlineElement=lyricLines()[lyricLines().length-1];assert.equal(baseText(inlineElement),inlineRuby.target);
+	for(const example of [parentheses.mixed,parentheses.echo]) {
+		const el=lyricLines()[texts.indexOf(example.target)];assert.equal(baseText(el),example.target);
+		const copy=el.cloneNode(true);for(const n of copy.querySelectorAll('.fg-rt,rt,.rnp-karaoke-word-filler,.fg-hide'))n.remove();
+		assert.equal(copy.textContent,example.visible,'Only annotation parentheses are hidden in the rendered line');
+		const hidden=[...el.querySelectorAll('.fg-hide')].filter(n=>!n.closest('.rnp-karaoke-word-filler')).map(n=>n.textContent).join('');assert.equal(hidden,example.hidden.join(''));
+	}
+	const chorus=lyricLines()[texts.indexOf(parentheses.mixed.target)];
+	assert([...chorus.querySelectorAll('.fg-ruby')].some(n=>baseText(n)==='君'&&n.querySelector('.fg-rt').textContent===win.FuriganaExternalCore.kana('きみ',mode)),'Retained chorus text receives normal furigana');
+
+	const inlineElement=lyricLines()[texts.indexOf(inlineRuby.target)];assert.equal(baseText(inlineElement),inlineRuby.target);
 	const inlinePairs=[...inlineElement.querySelectorAll('.fg-ruby')].map(n=>[baseText(n),n.querySelector('.fg-rt').textContent]);
 	for(const [word,reading] of [['思春期','ししゅんき'],['疵口','きずぐち'],['胸','むね']])assert(inlinePairs.some(p=>p[0]===word&&p[1]===win.FuriganaExternalCore.kana(reading,mode)),'Website reading survives client inline ruby: '+word);
 	assert([...inlineElement.querySelectorAll('.fg-hide')].filter(n=>!n.closest('.rnp-karaoke-word-filler')).map(n=>n.textContent).join('')==='(きずぐち)');
@@ -92,7 +102,7 @@ const assertScreenshot = (mode = 'hiragana') => {
 	assert(win.JPFurigana.readings(weekend.target).some(s=>s.text==='旗'&&s.rt==='はた'),'The public resolver must share the contextual website fix');
 	assert(win.JPFurigana.readings('かんじ').some(s=>s.rt==='かんじ'),'Public resolver and lyric page share original-line context even for kana-only variants');
 	assert(!win.JPFurigana.readings('作詞: 空ゆい子').some(s=>s.rt),'Public resolver inherits credit skipping even when the artist has kana');
-	assert.equal(win.JPFurigana.state.srcExternal, 8);
+	assert.equal(win.JPFurigana.state.srcExternal, 10);
 	assert.equal(win.JPFurigana.state.srcRomaji, 1, 'An actually unmatched line still falls back');
 	assertScreenshot();
 	assert([...win.document.querySelectorAll('.translation')].every(n => n.textContent === '保留原来的中文翻译'));
@@ -101,7 +111,7 @@ const assertScreenshot = (mode = 'hiragana') => {
 	assert(panel.querySelector('option[value="external"]'));
 	assert.equal(panel.querySelector('.fg-external-settings').hidden, false);
 	assert(panel.querySelector('.fg-external-status').textContent.includes('UtaTen'));
-	assert(panel.querySelector('.fg-external-status').textContent.includes('网站命中 8 行；网易云音译回退 1 行'));
+	assert(panel.querySelector('.fg-external-status').textContent.includes('网站命中 10 行；网易云音译回退 1 行'));
 	// Exercise the real settings -> dialog -> per-song persistence path.
 	const beforeManual = requests;
 	panel.querySelector('[data-a="externalAssign"]').click();
