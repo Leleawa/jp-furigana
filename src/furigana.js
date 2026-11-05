@@ -1054,6 +1054,71 @@
 	function positioned(segments) {
 		let at=0;return segments.map(s=>{const p={s,start:at,end:at+s.text.length};at=p.end;return p;});
 	}
+	function segmentsFromDictionary(tokenizer,text,opts={}) {
+		const raw=tokensToSegments(tokenizeForReading(tokenizer,text),{...opts,inlineRuby:false});
+		const notes=inlineRubyRanges(text,raw);
+		if(notes.some(r=>!r.confirmed)&&text.length<=4096) {
+			const bases=new Map(inlineRubyRanges(text).map(r=>[r.mid,r.from]));
+			// YRC can interrupt an inflected word: 揺(ゆ)れる becomes a noun
+			// 揺(ゆら) if tokenized literally. Check the uninterrupted word first;
+			// use it only where its dictionary pronunciation confirms the note.
+			const chars=[],positions=[];let note=0;
+			for(let i=0;i<text.length;i++) {
+				if(note<notes.length&&i===notes[note].mid){i=notes[note++].to-1;continue;}
+				chars.push(text[i]);positions.push(i);
+			}
+			const japanese=new RegExp(`[${KANJI}ぁ-ゖァ-ヺー]`),kept=[];
+			for(let i=0;i<chars.length;i++) {
+				if(/\s/.test(chars[i])) {
+					let end=i+1;while(end<chars.length&&/\s/.test(chars[end]))end++;
+					if(i>0&&japanese.test(chars[i-1])&&end<chars.length&&japanese.test(chars[end])){i=end-1;continue;}
+				}
+				kept.push(i);
+			}
+			const offsets=kept.map(i=>positions[i]),clean=kept.map(i=>chars[i]).join('');
+			const context=tokensToSegments(tokenizeForReading(tokenizer,clean),{...opts,inlineRuby:false});
+			const contextUnits=positioned(context),rawUnits=positioned(raw),overlays=new Map();
+			const location=at=>{let lo=0,hi=offsets.length;while(lo<hi){const mid=(lo+hi)>>1;if(offsets[mid]<at)lo=mid+1;else hi=mid;}return lo;};
+			for(const r of notes) {
+				if(r.confirmed)continue;
+				const end=location(r.mid),start=readingBefore(context,end,r.rt,location(bases.get(r.mid)));
+				if(start===null)continue;
+				for(const p of contextUnits) {
+					if(!p.s.rt||p.start<start||p.end>end)continue;
+					const a=offsets[p.start],b=offsets[p.end-1]+1;
+					if(notes.some(n=>n.mid<b&&n.to>a)||rawUnits.some(u=>u.s.rt&&((u.start<a&&a<u.end)||(u.start<b&&b<u.end))))continue;
+					overlays.set(a,{start:a,end:b,s:{text:text.slice(a,b),rt:p.s.rt,at:a}});
+				}
+			}
+			if(overlays.size) {
+				const out=[];let cursor=0;
+				const append=(a,b)=>{for(const p of rawUnits){const from=Math.max(a,p.start),to=Math.min(b,p.end);if(from<to)out.push(from===p.start&&to===p.end?stripSegment(p.s):{text:text.slice(from,to)});}};
+				for(const p of [...overlays.values()].sort((a,b)=>a.start-b.start)){append(cursor,p.start);out.push(p.s);cursor=p.end;}
+				append(cursor,text.length);
+				return opts.inlineRuby===false?out:normalizeInlineRuby(out,opts);
+			}
+		}
+		return opts.inlineRuby===false?raw:normalizeInlineRuby(raw,opts);
+	}
+	function romajiForLine(map,text,proofSegments) {
+		if(!map)return null;
+		const exact=map.get(lyricKey(text));if(exact)return exact;
+		if(!/[（(]/.test(text))return null;
+		const notes=inlineRubyRanges(text,proofSegments),found=new Set();let best=Infinity;
+		for(const removed of inlineRubyVariants(notes)) {
+			if(!removed.length)continue;if(removed.length>best)break;
+			let clean='',cursor=0;for(const r of removed){clean+=text.slice(cursor,r.mid);cursor=r.to;}clean+=text.slice(cursor);
+			const reading=map.get(lyricKey(clean));if(!reading)continue;
+			if(removed.some(r=>!r.confirmed)) {
+				if(!proofSegments)continue;
+				const guided=resolveInlineRubyReading(proofSegments,romajiToKana(reading));
+				const hidden=guided&&positioned(guided).filter(p=>p.s.hidden);
+				if(!hidden||!removed.every(r=>hidden.some(p=>p.start<=r.mid&&p.end>=r.to)))continue;
+			}
+			best=removed.length;found.add(reading);
+		}
+		return found.size===1?[...found][0]:null;
+	}
 	function readingBefore(segments, end, reading, minimum=0) {
 		const want=pronunciation(reading);if(!want)return null;
 		const units=positioned(segments);let spoken='',hasKanji=false;
@@ -1216,5 +1281,7 @@
 		readingBefore,
 		normalizeInlineRuby,
 		resolveInlineRubyReading,
+		segmentsFromDictionary,
+		romajiForLine,
 	};
 });
