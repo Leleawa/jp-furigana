@@ -21,11 +21,11 @@
 		return;
 	}
 	// 改了实现就换一下，方便确认插件到底有没有被重新加载（JPFurigana.build）
-	const BUILD = '1.2.1-rnp-parentheses-fixes';
+	const BUILD = '1.2.1-inline-priority-fixes';
 	const REPO_URL = 'https://github.com/Leleawa/jp-furigana';
 	const CONFIG_KEY = 'jp-furigana.config';
 	// 注音算法改了就换 key，让旧缓存自然失效
-	const CACHE_KEY = 'jp-furigana.cache.v6';
+	const CACHE_KEY = 'jp-furigana.cache.v7';
 	const CACHE_LIMIT = 4000;
 
 	const DEFAULTS = {
@@ -190,7 +190,7 @@
 	const cache = new Map();
 	try {
 		localStorage.removeItem('jp-furigana.cache.v3'); // obsolete results could include missing readings
-		for(const version of ['v4','v5'])localStorage.removeItem(CACHE_KEY.replace(/v6$/,version));
+		for(const version of ['v4','v5','v6'])localStorage.removeItem(CACHE_KEY.replace(/v7$/,version));
 		const raw = JSON.parse(localStorage.getItem(CACHE_KEY));
 		if (raw && typeof raw === 'object')
 			for (const k of Object.keys(raw)) cache.set(k, raw[k]);

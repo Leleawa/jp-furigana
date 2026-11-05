@@ -11,6 +11,7 @@
 		return canonical(text);
 	}
 	const key = a => JSON.stringify([a.provider, a.url, a.line, a.start, a.text, a.original]);
+	const positionKey = a => JSON.stringify([a.provider, a.url, a.line, a.start, a.text]);
 	function valid(a) {
 		return a && (a.provider === 'local' ? a.url === '' : ['utaten', 'utanet'].includes(a.provider) && core.allowedURL(a.url)) &&
 			typeof a.line === 'string' && a.line.length <= 12000 && Number.isInteger(a.start) && a.start >= 0 &&
@@ -22,14 +23,18 @@
 	function annotate(record, text, segments, mode) {
 		if (!segments) return null;
 		const edits = new Map(items(record).map(a => [key(a), a]));
+		const positions = new Map(items(record).map(a => [positionKey(a), a]));
 		const local = new Map(items(record).filter(a => a.provider === 'local').map(a => [JSON.stringify([a.line, a.start, a.text]), a]));
 		let start = 0;
 		return segments.map(seg => {
 			const at = start; start += seg.text.length;
 			if (!seg.rt && (record.provider !== 'local' || !/[一-龯々]/.test(seg.text))) return seg;
 			let anchor = { provider: record.provider, url: record.url, line: text, start: at, text: seg.text, original: canonical(seg.rt || '') };
-			const edit = edits.get(key(anchor)) || (record.provider !== 'local' && local.get(JSON.stringify([text, at, seg.text])));
+			const edit = edits.get(key(anchor)) || (seg.fixed && positions.get(positionKey(anchor))) || (record.provider !== 'local' && local.get(JSON.stringify([text, at, seg.text])));
 			if (edit && edit.provider === 'local') anchor = { ...edit };
+			// A newly recognized original note must not suppress an existing manual
+			// correction at the same unchanged word. This flag is runtime-only.
+			if (seg.fixed) { anchor.original = canonical(seg.rt || ''); anchor.inline = true; }
 			return { ...seg, rt: edit ? core.kana(edit.reading, mode) : seg.rt,
 				edit: { ...anchor, songId: record.songId, reading: edit ? canonical(edit.reading) : anchor.original },
 				originalRt: edit ? core.kana(anchor.original, mode) : null };
@@ -39,9 +44,9 @@
 		const next = { ...record }, custom = value == null ? null : reading(value);
 		// Keep even unknown/orphaned entries; a refetch must not discard user work.
 		const all = Array.isArray(record.userEdits) ? record.userEdits : [];
-		next.userEdits = all.filter(a => !valid(a) || key(a) !== key(anchor));
+		next.userEdits = all.filter(a => !valid(a) || (anchor.inline ? positionKey(a) !== positionKey(anchor) : key(a) !== key(anchor)));
 		if (custom && custom !== anchor.original) {
-			const { songId, reading: previous, ...location } = anchor;
+			const { songId, reading: previous, inline, ...location } = anchor;
 			next.userEdits.push({ ...location, reading: custom, updatedAt: new Date().toISOString() });
 		}
 		return next;

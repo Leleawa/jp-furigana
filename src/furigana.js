@@ -557,7 +557,7 @@
 		const selected=selectInlineVariant(literal,notes,reading,opts,true);
 		if(selected)return selected;
 		const aligned=alignFromReading(text,reading,literal,opts);
-		return aligned&&normalizeInlineRuby(aligned,{...opts,reading});
+		return aligned&&normalizeInlineRuby(aligned,{...opts,reading,proofSegments:literal,preferInline:true});
 	}
 
 	/** Unknown kanji still consume the supplied reading; do not treat them as kana.
@@ -1079,10 +1079,23 @@
 			const context=tokensToSegments(tokenizeForReading(tokenizer,clean),{...opts,inlineRuby:false});
 			const contextUnits=positioned(context),rawUnits=positioned(raw),overlays=new Map();
 			const location=at=>{let lo=0,hi=offsets.length;while(lo<hi){const mid=(lo+hi)>>1;if(offsets[mid]<at)lo=mid+1;else hi=mid;}return lo;};
+			let inflectionChecks=0;
 			for(const r of notes) {
 				if(r.confirmed)continue;
 				const end=location(r.mid),start=readingBefore(context,end,r.rt,location(bases.get(r.mid)));
-				if(start===null)continue;
+				if(start===null) {
+					// Some lyric spellings give only part of a verb reading, e.g.
+					// 結(む)すんで. The literal spelling 結すんで has no matching
+					// dictionary stem. Confirm the supplied kana + following okurigana
+					// as one known inflected word; an interjection such as (ああ) fails.
+					const tail=/^\s*([ぁ-ゖ]{1,24})/u.exec(text.slice(r.to)),a=r.mid-1,b=r.mid;
+					if(!tail||r.rt.length>16||!RE_HAS_KANJI.test(text[a])||inflectionChecks++>=6)continue;
+					const head=tokenizeForReading(tokenizer,r.rt+tail[1])[0];
+					if(!head||head.word_type!=='KNOWN'||!['動詞','形容詞'].includes(head.pos)||head.surface_form.length<=r.rt.length)continue;
+					if(rawUnits.some(u=>u.s.rt&&((u.start<a&&a<u.end)||(u.start<b&&b<u.end))))continue;
+					overlays.set(a,{start:a,end:b,s:{text:text.slice(a,b),rt:opts.kana==='katakana'?toKatakana(r.rt):r.rt,at:a}});
+					continue;
+				}
 				for(const p of contextUnits) {
 					if(!p.s.rt||p.start<start||p.end>end)continue;
 					const a=offsets[p.start],b=offsets[p.end-1]+1;
@@ -1221,20 +1234,27 @@
 		const units=positioned(segments);
 		const fallback=opts.proofSegments&&inlineRubyRanges(text,opts.proofSegments);
 		const notes=inlineRubyRanges(text,segments).map(r=>r.confirmed?r:fallback&&fallback.find(p=>p.confirmed&&p.mid===r.mid&&p.to===r.to)||r).filter(r=>
-			!units.some(p=>p.s.hidden&&p.start<=r.mid&&p.end>=r.to));
+			opts.preferInline||!units.some(p=>p.s.hidden&&p.start<=r.mid&&p.end>=r.to));
 		if(!notes.length)return segments;
+		const finishOptions={...opts,preserveReadings:opts.preferInline?false:opts.preserveReadings};
+		const apply=(base,ranges)=>applyRubyRanges(base,ranges,finishOptions)||(opts.preferInline&&ranges.length?null:base);
+		const finish=selected=>{
+			const hidden=positioned(selected).filter(p=>p.s.hidden);
+			const active=notes.filter(r=>r.confirmed&&hidden.some(p=>p.start<=r.mid&&p.end>=r.to));
+			return apply(selected,active);
+		};
 		if(opts.reading) {
 			if(opts.proofSegments) {
 				const guided=resolveInlineRubyReading(opts.proofSegments,opts.reading,opts);
 				if(guided) {
 					const hidden=positioned(guided).filter(p=>p.s.hidden);
-					return applyRubyRanges(segments,notes.filter(r=>r.confirmed&&hidden.some(p=>p.start<=r.mid&&p.end>=r.to)),opts)||segments;
+					return apply(segments,notes.filter(r=>r.confirmed&&hidden.some(p=>p.start<=r.mid&&p.end>=r.to)));
 				}
 			}
 			const selected=selectInlineVariant(segments,notes.filter(r=>r.confirmed),opts.reading,opts,false);
-			if(selected)return selected;
+			if(selected)return finish(selected);
 		}
-		return applyRubyRanges(segments,notes.filter(r=>r.confirmed),opts)||segments;
+		return apply(segments,notes.filter(r=>r.confirmed));
 	}
 
 	// Original YRC text is also needed for language detection and line matching.

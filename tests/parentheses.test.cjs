@@ -53,7 +53,7 @@ kuromoji.builder({dicPath:path.resolve(__dirname,'../src/dict')}).build(async(er
   const spacedResult=external.segmentsFor(spaced,external.prepare({provider:'utaten',lines:[plainSite]}),'hiragana');verify(spacedResult,spaced);assert.equal(visible(spacedResult),plainSite.text);
   const specialText='扉(とびら)へ',specialSite=site([{text:'扉',rt:'どあ'},{text:'へ'}]);
   const specialResult=external.segmentsFor(specialText,external.prepare({provider:'utaten',lines:[specialSite]}),'hiragana',null,{proofSegments:dict(specialText,'hiragana',true)});verify(specialResult,specialText);
-  assert.equal(visible(specialResult),'扉へ');assert(specialResult.some(s=>s.text==='扉'&&s.rt==='どあ'),'Note cleanup preserves the website special reading');
+  assert.equal(visible(specialResult),'扉へ');assert(specialResult.some(s=>s.text==='扉'&&s.rt==='とびら'),'The original inline reading takes priority over a conflicting website reading');
   const explicit=site([...plainSite.segments,{text:'（とびら ）'}]);
   const explicitResult=external.segmentsFor(spaced,external.prepare({provider:'utaten',lines:[explicit]}),'hiragana');verify(explicitResult,spaced);assert.equal(visible(explicitResult),plainSite.text,'Redundant notation in the website text is normalized too');
   // New reading evidence invalidates only the in-memory result. Editing uses

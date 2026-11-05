@@ -14,6 +14,8 @@ const samples=[
  {lrc:'揺れる星と泳ぐ（君の声）',yrc:'揺（ゆ）れる星（ほし ）と泳（およ）ぐ（君の声）',roma:'yu re ru ho shi to o yo gu ki mi no ko e',pairs:[['揺','ゆ'],['星','ほし'],['泳','およ'],['君','きみ'],['声','こえ']]},
  {lrc:'空（そら）を見る',yrc:'空（そら）を見る',roma:'so ra so ra wo mi ru',pairs:[['空','そら']]},
  {lrc:'揺れる星と泳ぐ',yrc:'揺 （ゆ） れる星 （ほし） と泳 （およ） ぐ',visible:'揺 れる星 と泳 ぐ',roma:'yu re ru ho shi to o yo gu',pairs:[['揺','ゆ'],['星','ほし'],['泳','およ']]},
+ {lrc:'切れた赤い糸 結（む）すんで',yrc:'切れた赤い糸 結（む）すんで',visible:'切れた赤い糸 結すんで',nativeVisible:'切れた赤い糸 結すんで',roma:'ki re ta a ka i i to ke tsu su n de',pairs:[['結','む']]},
+ {lrc:'信じた約束は遠く（遠く）',yrc:'信じた約束は遠く（遠く）',roma:'shi n ji ta ya ku so ku ha to o ku to o ku',pairs:[['遠','とお']]},
 ];
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const textOf=(node,visible=false)=>{const copy=node.cloneNode(true);for(const n of copy.querySelectorAll('.fg-rt,rt,.rnp-karaoke-word-filler'+(visible?',.fg-hide':'')))n.remove();return copy.textContent;};
@@ -53,7 +55,7 @@ kuromoji.builder({dicPath:path.join(src,'dict')}).build(async(error,tokenizer)=>
     win.plugin={pluginPath:src,devMode:false,onLoad:f=>handlers.load=f,onConfig:f=>handlers.config=f};
     win.betterncm={app:{getBetterNCMVersion:async()=>'1.3.4'},ncm:{openUrl(){throw Error('No URL launch expected');}},fs:{exists:async()=>true}};
     win[plus?'kuromojiFuriganaPlus':'kuromoji']={builder:()=>({build:cb=>cb(null,tokenizer)})};
-    win.fetch=async()=>({ok:true,json:async()=>({lrc:{lyric:samples.map((s,i)=>`[00:0${i+1}]${s.lrc}`).join('\n')},romalrc:{lyric:samples.map((s,i)=>`[00:0${i+1}]${s.roma}`).join('\n')}})});
+    win.fetch=async url=>{assert.equal(new URL(url).hostname,'music.163.com','Selected dictionary/official sources must not request external websites');return {ok:true,json:async()=>({lrc:{lyric:samples.map((s,i)=>`[00:${String(i+1).padStart(2,'0')}]${s.lrc}`).join('\n')},romalrc:{lyric:samples.map((s,i)=>`[00:${String(i+1).padStart(2,'0')}]${s.roma}`).join('\n')}})};};
     win.localStorage.setItem(manifest.slug+'.config',JSON.stringify({readingSource:'dict',desktopEnabled:false}));
     if(render.endsWith('noruby'))win.localStorage.setItem(manifest.slug+'.no-ruby','1');
     for(const {file} of manifest.injects.Main)if(!['kuromoji.js','desktop.js'].includes(file))win.eval(fs.readFileSync(path.join(src,file),'utf8'));
@@ -64,7 +66,7 @@ kuromoji.builder({dicPath:path.join(src,'dict')}).build(async(error,tokenizer)=>
      const lines=[...win.document.querySelectorAll(render==='native'?'li.line>p:first-child':'.rnp-lyrics-line-'+(karaoke?'karaoke':'original'))];
      for(let i=0;i<samples.length;i++) {
       const s=samples[i],line=lines[i];assert.equal(textOf(line),initial[i],render+' preserves original offsets');
-      const expected=render==='native'||i===5?initial[i]:s.visible||s.lrc;
+      const expected=render==='native'?(s.nativeVisible||initial[i]):s.visible||s.lrc;
       // Dictionary-only mode cannot prove whether an identical kana is an echo.
       const visible=source==='dict'&&i===5?'空を見る':expected;
       assert.equal(textOf(line,true),visible,`${render}/${source}: inline annotations must not leak into the displayed lyric`);

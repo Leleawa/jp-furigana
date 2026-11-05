@@ -360,13 +360,13 @@
 		if(next!==hidden.length||output.map(s=>s.text).join('')!==target)return null;
 		// Text similarity alone must not erase a chorus. Require either the
 		// website reading or an independently confirmed dictionary annotation.
-		// A website's special reading still wins over a conventional inline note.
+		// Original inline notes are applied after matching, before manual edits.
 		const confirmed=core.inlineRubyRanges(target,output).filter(r=>r.confirmed);
 		if(!removed.every(r=>r.confirmed||confirmed.some(c=>c.mid===r.mid&&c.to===r.to)))return null;
 		return output;
 	}
 	function segmentsFor(target, groups, mode, fromRomaji, options={}) {
-		const normalize=result=>result&&core.normalizeInlineRuby(result,{...options,kana:mode,preserveReadings:true});
+		const normalize=result=>result&&core.normalizeInlineRuby(result,{...options,kana:mode,preferInline:true});
 		const candidates=core.inlineRubyRanges(target,options.proofSegments);
 		if(!candidates.length)return normalize(resolveSegments(target,groups,mode,fromRomaji));
 		let notes=candidates;
