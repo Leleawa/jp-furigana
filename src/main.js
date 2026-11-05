@@ -89,6 +89,7 @@
 			cfg.rtSize = DEFAULTS.rtSize;
 			cfg.migrated = true;
 		}
+		if (!RT_WEIGHTS.includes(cfg.rtWeight)) cfg.rtWeight = DEFAULTS.rtWeight;
 		// Retain the current configuration revision without bringing Plus-only settings.
 		if (!(saved.configVersion >= CONFIG_VERSION)) cfg.migrated = true;
 		for (const key of Object.keys(cfg)) if (key.startsWith('desktop')) { delete cfg[key]; cfg.migrated = true; }
@@ -1947,6 +1948,7 @@
 			value = Number(value); if (!Number.isFinite(value)) throw new Error('请输入有效数值');
 			value = Math.max(20, Math.min(100, Math.round(value)));
 		}
+		if (key === 'rtWeight') value = String(value);
 		const choices = { readingSource: ['romaji', 'dict', 'external'], externalProvider: ['auto', 'utaten', 'utanet'], externalAutoRetry: ['off', 'failed'], kana: ['hiragana', 'katakana'], rtWeight: RT_WEIGHTS };
 		if (choices[key] && !choices[key].includes(value)) throw new Error('无效的设置选项');
 		if (key === 'readingSource' && value === 'external' && !config.externalConsent) {
