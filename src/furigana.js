@@ -33,6 +33,7 @@
 	// Candidates only: kana parentheses are not automatically ruby (choruses
 	// can have the same shape). Confirm them against the preceding pronunciation.
 	const RE_RUBY_BASE = new RegExp(`[0-9０-９]*[${KANJI}][${KANJI}ぁ-ゖァ-ヺー]*$`);
+	const RE_KATA_BASE = new RegExp(`[0-9０-９]*[${KANJI}]+$`);
 	const RE_PAREN = /[（(][^（）()]*[）)]/g;
 
 	function toHiragana(s) {
@@ -540,7 +541,7 @@
 			for (const latin of reading.includes(UNKNOWN) ? [true, false] : [false]) {
 				const segs = fillFromReading(slots, reading, skipParen ? parens : [], latin);
 				if (!segs) continue;
-				for (const s of segs) if (s.rt) s.rt = kanaFn(toKatakana(s.rt));
+				for (const s of segs) if (s.rt) s.rt = s.inlineKana==='katakana' ? toKatakana(s.rt) : kanaFn(toKatakana(s.rt));
 				return segs;
 			}
 		}
@@ -738,6 +739,7 @@
 			out.at = s.at;
 		}
 		if (s.fixed) out.fixed = true;
+		if (s.inlineKana === 'katakana') out.inlineKana = 'katakana';
 		if (s.hidden) out.hidden = true;
 		if (s.num) out.num = s.num;
 		return out;
@@ -1149,15 +1151,22 @@
 	function inlineRubyRanges(text, segments) {
 		const output=[],units=segments&&positioned(segments);
 		for(const m of text.matchAll(RE_PAREN)) {
-			const rt=toHiragana(m[0].slice(1,-1).normalize('NFKC').replace(/[\s・]/g,''));
+			const written=m[0].slice(1,-1).normalize('NFKC').replace(/[\s・]/g,'');
+			const katakana=/^[ァ-ヺー]+$/.test(written)&&/[ァ-ヺ]/.test(written);
+			const rt=katakana?written:toHiragana(written);
 			if(!rt || !/^[ぁ-ゖァ-ヺー]+$/.test(rt) || rt.length>256)continue;
 			const prefix=text.slice(0,m.index).replace(/\s+$/u,''),base=RE_RUBY_BASE.exec(prefix);
 			if(!base)continue;
-			const r={from:base.index,mid:prefix.length,open:m.index,to:m.index+m[0].length,rt,confirmed:false};
+			// A written loanword can deliberately replace the dictionary reading:
+			// 旋律(メロディ), 風景画(ペサージュ). Keep obvious vocal repeats as lyrics.
+			const chorus=katakana&&(/^[アイウエオァィゥェォー]+$/.test(rt)||/^([ァ-ヺ]{1,3}ー?)\1+$/.test(rt));
+			const word=katakana&&!chorus&&RE_KATA_BASE.exec(prefix);
+			const r={from:word?word.index:base.index,mid:prefix.length,open:m.index,to:m.index+m[0].length,rt,confirmed:!!word};
+			if(katakana)r.script='katakana';
 			if(segments) {
 				const from=readingBefore(segments,r.mid,rt,r.from);
 				if(from!==null){r.from=from;r.confirmed=true;}
-				else {
+				else if(!word) {
 					// An irregular reading needs whole-line evidence. Limit its base to
 					// the nearest dictionary kanji unit, rather than the entire phrase.
 					const last=units.filter(p=>p.start>=r.from&&p.end<=r.mid&&RE_HAS_KANJI.test(p.s.text)).pop();
@@ -1187,7 +1196,7 @@
 		for(const p of copySegments(segs,notes.flatMap(r=>preserve?[r.mid,r.to]:[r.from,r.mid,r.to]))) {
 			const r=notes.find(r=>p.start>=(preserve?r.mid:r.from)&&p.start<r.to);
 			if(!r)out.push(stripSegment(p));
-			else if(!preserve&&p.start===r.from)out.push({text:text.slice(r.from,r.mid),rt:kanaFn(toKatakana(r.rt)),at:r.from,fixed:true});
+			else if(!preserve&&p.start===r.from)out.push({text:text.slice(r.from,r.mid),rt:r.script==='katakana'?toKatakana(r.rt):kanaFn(toKatakana(r.rt)),at:r.from,fixed:true,...(r.script==='katakana'?{inlineKana:'katakana'}:{})});
 			else if(p.start===r.mid)out.push({text:text.slice(r.mid,r.to),hidden:true});
 		}
 		return out.map(s=>s.text).join('')===text?out:null;

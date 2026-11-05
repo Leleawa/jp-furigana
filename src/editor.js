@@ -97,8 +97,8 @@
 			const el = doc.createElement('div'); el.className = 'fg-edit-ui fg-editor-pop'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', '编辑注音');
 			el.innerHTML = '<strong data-word></strong><input data-reading aria-label="修正注音" maxlength="1000" autocomplete="off" spellcheck="false"><div data-details><label>原始注音<input data-original aria-label="原始注音" readonly></label><div class="fg-buttons"><button data-apply>应用</button><button data-cancel>取消</button><button data-restore>恢复原注音</button></div><div role="alert"></div></div>';
 			el.querySelector('[data-word]').textContent = anchor.text;
-			const input = el.querySelector('[data-reading]'); input.value = anchor.reading;
-			el.querySelector('[data-original]').value = anchor.original;
+			const input = el.querySelector('[data-reading]'); input.value = anchor.displayReading || anchor.reading;
+			el.querySelector('[data-original]').value = anchor.displayOriginal || anchor.original;
 			popup = { el, holder, anchor: { ...anchor }, input, initial: input.value, error: el.querySelector('[role=alert]'), saving: false };
 			doc.body.append(el); position();
 			input.onfocus = () => { el.classList.add('focused'); position(); };

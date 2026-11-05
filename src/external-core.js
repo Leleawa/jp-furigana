@@ -11,6 +11,10 @@
 		彈: '弾', 焰: '焔', 廻: '回', 涂: '塗', 傳: '伝', 說: '説', 咒: '呪', 駈: '駆', 溯: '遡', 淚: '涙', 絕: '絶', 冲: '衝' };
 	const kana = (s, mode) => String(s).replace(/[ァ-ヶ]/g, c => String.fromCharCode(c.charCodeAt(0) - 0x60))
 		.replace(/[ぁ-ゖ]/g, c => mode === 'katakana' ? String.fromCharCode(c.charCodeAt(0) + 0x60) : c);
+	// Website and user-written katakana carry spelling information. The global
+	// hiragana preference must not erase it; canonical keys still use kana().
+	const writtenKana = (s, mode) => String(s).normalize('NFKC')
+		.replace(/[ぁ-ゖ]/g, c => mode === 'katakana' ? String.fromCharCode(c.charCodeAt(0) + 0x60) : c);
 	function indexed(text, variants = LYRIC_VARIANTS) {
 		let key = '', positions = [];
 		let offset = 0;
@@ -119,7 +123,7 @@
 			if (node.classList.contains('ruby') || node.nodeName === 'RUBY') {
 				const rb = node.querySelector('.rb, rb'), rt = node.querySelector('.rt, rt');
 				if (rb && rt) {
-					const text = rb.textContent, reading = kana(rt.textContent.trim());
+					const text = rb.textContent, reading = writtenKana(rt.textContent.trim());
 					segments.push(/^[ぁ-ゖァ-ヶー\s・]+$/.test(reading) ? { text, rt: reading.replace(/[\s・]/g, '') } : { text });
 					return;
 				}
@@ -205,7 +209,7 @@
 				if (offset < from || end > until) return null;
 				const startAt = ti.positions[offset - from].start;
 				const endAt = ti.positions[end - from - 1].end;
-				annotations.push({ start: startAt, end: endAt, rt: kana(s.rt, mode) });
+				annotations.push({ start: startAt, end: endAt, rt: writtenKana(s.rt, mode) });
 			}
 			offset = end;
 		}
@@ -266,9 +270,9 @@
 			if(segment.hidden && chars.length) {
 				atoms.push({from:offset,to:offset+chars.length,reading:'',annotated:false,hidden:true});
 			} else if(segment.rt && chars.length) {
-				atoms.push({from:offset,to:offset+chars.length,reading:kana(segment.rt,'hiragana'),annotated:true});
+				atoms.push({from:offset,to:offset+chars.length,reading:writtenKana(segment.rt,'hiragana'),annotated:true});
 			} else for(let i=0;i<chars.length;i++) {
-				const c=kana(chars[i],'hiragana');atoms.push({from:offset+i,to:offset+i+1,reading:/^[ぁ-ゖー]$/.test(c)?c:null,annotated:false});
+				const c=writtenKana(chars[i],'hiragana');atoms.push({from:offset+i,to:offset+i+1,reading:/^[ぁ-ゖァ-ヺー]$/.test(c)?c:null,annotated:false});
 			}
 			offset+=chars.length;
 		}
@@ -293,7 +297,7 @@
 			if(chunk.hidden && /[（(]/.test(target[start-1]||'') && /[）)]/.test(target[end]||'')){start--;end++;}
 			if(start<cursor)return null;
 			if(start>cursor)output.push({text:target.slice(cursor,start)});
-			output.push(chunk.hidden?{text:target.slice(start,end),hidden:true}:{text:target.slice(start,end),rt:kana(chunk.reading,mode)});cursor=end;used=used||!chunk.hidden;
+			output.push(chunk.hidden?{text:target.slice(start,end),hidden:true}:{text:target.slice(start,end),rt:writtenKana(chunk.reading,mode)});cursor=end;used=used||!chunk.hidden;
 		}
 		if(cursor<target.length)output.push({text:target.slice(cursor)});
 		return used?output:null;
@@ -336,7 +340,7 @@
 			resolved.add(signature);
 			const segments=g.segments || fromRomaji && fromRomaji(g.text,g.romaji), prepared={...g,segments};
 			const sameText=at===0 && g.text===target && segments && segments.some(s=>s.rt);
-			const result = !segments ? null : sameText ? segments.map(s=>s.rt?{...s,rt:kana(s.rt,mode)}:{...s}) : mapped ? projectAligned(target, prepared, mode) : project(target, prepared, at, mode);
+			const result = !segments ? null : sameText ? segments.map(s=>s.rt?{...s,rt:writtenKana(s.rt,mode)}:{...s}) : mapped ? projectAligned(target, prepared, mode) : project(target, prepared, at, mode);
 			if (result && result.map(s => s.text).join('') === target) versions.set(JSON.stringify(result), result);
 			else return null;
 			if(versions.size>1)return null;
@@ -410,5 +414,5 @@
 		const characters = found.reduce((n, s) => n + s.length, 0);
 		return { hits: found.length, characters, accepted: found.length >= 2 && characters >= 24 && found.length / Math.min(8, targets.length) >= .25 };
 	}
-	return { key, titleKey, queryTitle, matches, allowedURL, utatenURL, searchURL, searchResults, parseUtaten, parseUtanet, validRecord, prepare, segmentsFor, kana, lyricEvidence };
+	return { key, titleKey, queryTitle, matches, allowedURL, utatenURL, searchURL, searchResults, parseUtaten, parseUtanet, validRecord, prepare, segmentsFor, kana, writtenKana, lyricEvidence };
 });

@@ -8,7 +8,7 @@
 	function reading(value) {
 		const text = String(value).trim().normalize('NFKC');
 		if (!/^[ぁ-ゖァ-ヶー]{1,1000}$/.test(text)) throw new Error('请输入 1–1000 个平假名或片假名（可含长音符）');
-		return canonical(text);
+		return text;
 	}
 	const key = a => JSON.stringify([a.provider, a.url, a.line, a.start, a.text, a.original]);
 	const positionKey = a => JSON.stringify([a.provider, a.url, a.line, a.start, a.text]);
@@ -35,9 +35,11 @@
 			// A newly recognized original note must not suppress an existing manual
 			// correction at the same unchanged word. This flag is runtime-only.
 			if (seg.fixed) { anchor.original = canonical(seg.rt || ''); anchor.inline = true; }
-			return { ...seg, rt: edit ? core.kana(edit.reading, mode) : seg.rt,
-				edit: { ...anchor, songId: record.songId, reading: edit ? canonical(edit.reading) : anchor.original },
-				originalRt: edit ? core.kana(anchor.original, mode) : null };
+			const original = seg.fixed || /[ァ-ヺ]/.test(seg.rt || '') ? seg.rt : core.kana(anchor.original,mode);
+			return { ...seg, rt: edit ? core.writtenKana(edit.reading, mode) : seg.rt,
+				edit: { ...anchor, songId: record.songId, reading: edit ? edit.reading : anchor.original,
+					displayOriginal:original,displayReading:edit?edit.reading:seg.rt || '' },
+				originalRt: edit ? original : null };
 		});
 	}
 	function update(record, anchor, value) {
@@ -45,8 +47,8 @@
 		// Keep even unknown/orphaned entries; a refetch must not discard user work.
 		const all = Array.isArray(record.userEdits) ? record.userEdits : [];
 		next.userEdits = all.filter(a => !valid(a) || (anchor.inline ? positionKey(a) !== positionKey(anchor) : key(a) !== key(anchor)));
-		if (custom && custom !== anchor.original) {
-			const { songId, reading: previous, inline, ...location } = anchor;
+		if (custom && custom !== (anchor.displayOriginal || anchor.original)) {
+			const { songId, reading: previous, inline, displayOriginal, displayReading, ...location } = anchor;
 			next.userEdits.push({ ...location, reading: custom, updatedAt: new Date().toISOString() });
 		}
 		return next;

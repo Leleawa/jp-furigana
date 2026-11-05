@@ -16,6 +16,9 @@ const samples=[
  {lrc:'揺れる星と泳ぐ',yrc:'揺 （ゆ） れる星 （ほし） と泳 （およ） ぐ',visible:'揺 れる星 と泳 ぐ',roma:'yu re ru ho shi to o yo gu',pairs:[['揺','ゆ'],['星','ほし'],['泳','およ']]},
  {lrc:'切れた赤い糸 結（む）すんで',yrc:'切れた赤い糸 結（む）すんで',visible:'切れた赤い糸 結すんで',nativeVisible:'切れた赤い糸 結すんで',roma:'ki re ta a ka i i to ke tsu su n de',pairs:[['結','む']]},
  {lrc:'信じた約束は遠く（遠く）',yrc:'信じた約束は遠く（遠く）',roma:'shi n ji ta ya ku so ku ha to o ku to o ku',pairs:[['遠','とお']]},
+ {lrc:'旋律（メロディ）と風琴（ハーモニカ）',yrc:'旋律（メロディ）と風琴（ハーモニカ）',visible:'旋律と風琴',nativeVisible:'旋律と風琴',roma:'se n ri tsu to fu u ki n',pairs:[['旋律','メロディ'],['風琴','ハーモニカ']]},
+ {lrc:'少女（モニカ）の風景画（ペサージュ）',yrc:'少女（モニカ）の風景画（ペサージュ）',visible:'少女の風景画',nativeVisible:'少女の風景画',roma:'sho u jo no fu u ke i ga',pairs:[['少女','モニカ'],['風景画','ペサージュ']]},
+ {lrc:'君の声（ラララ）',yrc:'君の声（ラララ）',roma:'ki mi no ko e ra ra ra',pairs:[['声','こえ']]},
 ];
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const textOf=(node,visible=false)=>{const copy=node.cloneNode(true);for(const n of copy.querySelectorAll('.fg-rt,rt,.rnp-karaoke-word-filler'+(visible?',.fg-hide':'')))n.remove();return copy.textContent;};

@@ -17,7 +17,7 @@ kuromoji.builder({dicPath:path.resolve(__dirname,'../src/dict')}).build(async(er
    const text='行けば戻れない 扉'+note;
    for(const mode of ['hiragana','katakana']) {
     const s=dict(text,mode);verify(s,text);assert.equal(visible(s),'行けば戻れない 扉');assert.deepEqual(hidden(s),[note]);
-    assert(s.some(p=>p.text==='扉'&&p.rt===(mode==='hiragana'?'とびら':'トビラ')));
+    assert(s.some(p=>p.text==='扉'&&p.rt===(mode==='katakana'||/[ァ-ヺｦ-ﾟ]/.test(note)?'トビラ':'とびら')));
    }
   }
   const mixed='扉 ( とびら ) の向こう（君の声）へ進む（もう一度）';

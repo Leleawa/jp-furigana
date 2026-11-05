@@ -16,7 +16,7 @@ for(const target of ['思春期疵口(きずぐち)胸のうち','思春期疵�
 		const result=core.segmentsFor(target,core.prepare({provider:'utaten',lines:[inlineLine]},[target]),mode);
 		assert(result,'Inline client ruby must not make a known website line fall back');
 		assert.equal(result.map(s=>s.text).join(''),target);
-		assert.deepEqual(pairs(result),[['思春期',core.kana('ししゅんき',mode)],['疵口',core.kana('きずぐち',mode)],['胸',core.kana('むね',mode)]]);
+		assert.deepEqual(pairs(result),[['思春期',core.kana('ししゅんき',mode)],['疵口',target.includes('キズグチ')?'キズグチ':core.kana('きずぐち',mode)],['胸',core.kana('むね',mode)]]);
 		assert(result.filter(s=>s.hidden).every(s=>/^[（(].*[）)]$/.test(s.text)));
 	}
 }
