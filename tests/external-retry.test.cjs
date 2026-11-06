@@ -7,9 +7,9 @@ const song = '<h2 class="newLyricTitle__main">試験曲</h2><h3><a href="/artist
 const metadata = async () => ({ title: '試験曲', artists: ['試験歌手'] });
 const off = { externalProvider: 'utaten', externalAutoRetry: 'off' }, on = { ...off, externalAutoRetry: 'failed' };
 const timeout = () => requestError({ timeout: true });
-function fixture(request, retryDelays = [0, 0, 0]) {
+function fixture(request, retryDelays = [0, 0, 0], localMetadata) {
 	const files = new Map(), states = [];
-	const client = create({ request, retryDelays, dataRoot: async () => 'C:/Test', parse: html => new JSDOM(html).window.document,
+	const client = create({ request, retryDelays, localMetadata, dataRoot: async () => 'C:/Test', parse: html => new JSDOM(html).window.document,
 		fs: { mkdir: async () => true, exists: async p => files.has(p), readFileText: async p => files.get(p), writeFileText: async (p, v) => { files.set(p, v); return true; } },
 		onStatus: () => states.push(client.inspect().status) });
 	return { client, states, files };
@@ -57,6 +57,7 @@ async function until(test) { for (let n = 0; n < 100; n++) { if (test()) return;
 	assert.match(retained.client.inspect().error, /网络请求超时/); assert.match(retained.client.inspect().status, /已有网站缓存/);
 	assert.equal([...retained.files.values()][0], saved);
 	offline = false; await retained.client.load('1', metadata, off, true); assert.equal(retained.client.inspect().error, '');
+	assert.equal(retained.client.inspect().manualSearch, null, 'Success clears the failure action');
 	// Local corrections remain usable and no longer suppress this playback's first request.
 	const local = fixture(async () => { throw timeout(); });
 	await local.client.ensureLocal('1', metadata, off);
@@ -76,16 +77,22 @@ async function until(test) { for (let n = 0; n < 100; n++) { if (test()) return;
 	const c = fixture(async () => { calls++; throw timeout(); });
 	await c.client.load('1', metadata, on); assert.equal(calls, 4, 'One initial request plus at most three retries');
 	assert.equal(c.client.inspect().waitingRetry, false);
+	assert.deepEqual(c.client.inspect().manualSearch, { title: '試験曲', artist: '試験歌手' }, 'The exhausted retry budget exposes the song for manual search');
+	const pinned = fixture(async () => { throw timeout(); }, [0], () => ({ title: '指定曲', artists: ['先頭', '二番目'] }));
+	await assert.rejects(pinned.client.setSource('1', async () => { throw new Error('Unexpected metadata lookup'); }, on, 'https://utaten.com/lyric/example/'));
+	assert.deepEqual(pinned.client.inspect().manualSearch, { title: '指定曲', artist: '先頭' }, 'A failed pinned page uses the active player metadata');
 	for (const response of [{ status: 403 }, { status: 404 }, { error: 'Permanent response failure' }]) {
 		calls = 0; const x = fixture(async () => { calls++; throw requestError(response); });
 		await x.client.load('1', metadata, on); assert.equal(calls, 1, 'Do not loop on refusal, missing pages or permanent response errors');
 	}
 	calls = 0; const missing = fixture(async () => { calls++; return '<html></html>'; });
 	await missing.client.load('1', metadata, on); assert.equal(calls, 2, 'Strict and title-only searches form one attempt; no match does not retry');
+	assert.deepEqual(missing.client.inspect().manualSearch, { title: '試験曲', artist: '試験歌手' });
 	let attempts = 0;
 	const d = fixture(async () => { attempts++; throw timeout(); }, [60000, 60000, 60000]);
 	const pending = d.client.load('1', metadata, on);
 	await until(() => d.client.inspect().waitingRetry);
+	assert.equal(d.client.inspect().manualSearch, null, 'Do not offer fallback while automatic retries are still pending');
 	d.client.setAutoRetry('off'); await pending;
 	assert.equal(attempts, 1, 'Disabling cancels the wait without issuing another initial request');
 	assert.equal(d.client.inspect().waitingRetry, false);
@@ -94,6 +101,7 @@ async function until(test) { for (let n = 0; n < 100; n++) { if (test()) return;
 	d.client.stop(); await resumed;
 	assert.equal(attempts, 2, 'Enabling after failure permits a fresh bounded attempt');
 	assert.equal(d.client.inspect().songId, null);
+	assert.equal(d.client.inspect().manualSearch, null);
 	let first = true;
 	const e = fixture(async url => { if (first) { first = false; throw timeout(); } return url.includes('/search') ? search : song; }, [60000]);
 	const old = e.client.load('1', metadata, on); await until(() => e.client.inspect().waitingRetry);

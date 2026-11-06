@@ -154,6 +154,7 @@
 		let generation = 0, currentId = null, current = null, groups = [], status = '未启用外部网站';
 		let cachePath = '', source = '', lastSettings = null;
 		let cancelWait = null, loading = false, lastMetadata = null, lastError = '', warning = '';
+		let manualSearch = null;
 		const retryDelays = deps.retryDelays || [3000, 8000, 15000];
 		const lineCache = new Map();
 		let writes = Promise.resolve();
@@ -179,11 +180,11 @@
 		function announce(text) { status = text; if (deps.onStatus) deps.onStatus(); }
 		const alive = g => g === generation;
 		function cancelRetry() { if (cancelWait) cancelWait(); }
-		function reset() { generation++; cancelRetry(); loading = false; currentId = null; current = null; groups = []; originalLines = null; source = ''; lastError = ''; warning = ''; lineCache.clear(); }
+		function reset() { generation++; cancelRetry(); loading = false; currentId = null; current = null; groups = []; originalLines = null; source = ''; lastError = ''; warning = ''; manualSearch = null; lineCache.clear(); }
 		function stop() { reset(); announce('未启用外部网站'); }
 		function cancelFetch() {
 			if (!loading) return false;
-			generation++; cancelRetry(); loading = false; lastError = '';
+			generation++; cancelRetry(); loading = false; lastError = ''; manualSearch = null;
 			announce('已停止本轮网站获取，可进入编辑；下次播放或重新获取时仍会尝试网站');
 			return true;
 		}
@@ -210,9 +211,10 @@
 		}
 		let originalLines = null;
 		const originals = () => deps.originalLines ? deps.originalLines(currentId) : null;
+		const inlineOptions=text=>/[（(]/.test(text)?{reading:deps.reading&&deps.reading(text),proofSegments:deps.proofSegments&&deps.proofSegments(text)}:{};
 		function accept(record, cached, g, cacheWarning = '', preserveRequest = false) {
 			if (!alive(g)) return;
-			if (!preserveRequest) { lastError = ''; warning = cacheWarning; }
+			if (!preserveRequest) { lastError = ''; warning = cacheWarning; manualSearch = null; }
 			current = record; lineCache.clear();
 			const scope = lastSettings && lastSettings.externalProvider;
 			source = scope && scope !== 'auto' && record.provider !== scope ? 'local' : record.provider;
@@ -228,7 +230,7 @@
 			if (!/^\d{1,20}$/.test(currentId)) { lastError = '当前歌曲没有可用的网易云 ID'; announce(lastError); return; }
 			const id = currentId;
 			loading = true;
-			let retries = 0;
+			let retries = 0, searchTrack = null;
 			async function attempt(task, label) {
 				for (;;) {
 					if (!alive(g)) throw new Error('已取消');
@@ -283,6 +285,13 @@
 				const track = manualUrl?null:await attempt(metadata, '获取歌曲信息');
 				if (!alive(g)) return;
 				if (!manualUrl&&(!track || !track.title || !Array.isArray(track.artists) || !track.artists.some(Boolean))) throw new Error('无法确定歌名与歌手，请稍后重试');
+				// A pinned URL skips the metadata request. Reuse the active player's
+				// name and artist if that request eventually needs a manual fallback.
+				const searchMetadata = track || (manualUrl && deps.localMetadata && deps.localMetadata(id));
+				if (searchMetadata && searchMetadata.title) {
+					const firstArtist = searchMetadata.artists.find(name => typeof name === 'string' && name.trim());
+					searchTrack = { title: String(searchMetadata.title).trim(), artist: firstArtist ? firstArtist.trim() : '' };
+				}
 				const providers = settings.externalProvider === 'utaten' ? ['utaten'] : settings.externalProvider === 'utanet' ? ['utanet'] : ['utaten', 'utanet'];
 				const failures = new Map();
 				let evidence;
@@ -292,13 +301,24 @@
 						catch (error) { const contextual = new Error(stage + '：' + errorText(error)); contextual.retryable = retryable(error); contextual.retryAfterMs = error.retryAfterMs; throw contextual; }
 					};
 					let candidates = [], searched = false;
+					const expectedTitle = core.titleKey(track.title);
 					const fetched = new Map();
+					let unusableDetail = null;
 					async function detail(candidate) {
 						if (fetched.has(candidate.url)) return fetched.get(candidate.url);
 						const url = provider === 'utaten' ? candidate.url : candidate.url.replace('/song/', '/global/en/lyric/');
 						const doc = await fetchDoc(url, '歌词页面');
-						const data = provider === 'utaten' ? core.parseUtaten(doc, url) : core.parseUtanet(doc, url, candidate);
-						if (core.titleKey(data.title) !== core.titleKey(track.title)) throw new Error('歌曲页歌名与搜索结果不一致');
+						let data;
+						try {
+							data = provider === 'utaten' ? core.parseUtaten(doc, url) : core.parseUtanet(doc, url, candidate);
+							if (core.titleKey(data.title) !== expectedTitle) throw new Error('歌曲页歌名与搜索结果不一致');
+							if (!core.validRecord({ schema: 1, songId: id, ...data }, id)) throw new Error('网站歌词格式校验失败');
+						} catch (error) {
+							// A different title or a page without usable lyrics does
+							// not disqualify the other candidates in this search.
+							unusableDetail = error;
+							data = null;
+						}
 						fetched.set(candidate.url, data); return data;
 					}
 					const artists = [...new Set(track.artists.filter(a => typeof a === 'string' && a.trim()).map(a=>a.trim()))];
@@ -307,24 +327,54 @@
 						const selected={...track,artists:[artist]};
 						if(provider==='utaten'||!searched){announce('正在按歌手搜索 · '+artist+'…');candidates=core.searchResults(await fetchDoc(core.searchURL(provider,selected),'搜索页面'),provider);searched=true;}
 						const exact=candidates.filter(c=>core.matches(c,selected));
-						if(exact.length===1){const data=await detail(exact[0]);if(core.matches(data,selected))return data;}
+						if(exact.length===1){const data=await detail(exact[0]);if(data&&core.matches(data,selected))return data;}
 					}
 					// Relax the artist only after strict matching fails; this remains one attempt.
-					if (provider === 'utaten') candidates = core.searchResults(await fetchDoc(core.searchURL(provider, track, true), '仅按歌名搜索'), provider);
-					candidates = candidates.filter(c => core.titleKey(c.title) === core.titleKey(track.title));
-					if (!candidates.length) throw new Error('未找到同名歌曲');
-					if (candidates.length > 5) throw new Error('同名候选超过 5 个，未自动套用');
+					const sameTitle = new Map();
+					const collect = rows => {
+						for (const candidate of rows) {
+							if (core.titleKey(candidate.title) !== expectedTitle) continue;
+							const previous = sameTitle.get(candidate.url);
+							if (!previous || (candidate.preview && !previous.preview)) sameTitle.set(candidate.url, candidate);
+						}
+					};
+					if (provider === 'utaten') {
+						announce('正在按曲名搜索 UtaTen…');
+						let url = core.searchURL(provider, track, true);
+						while (url) {
+							if (!alive(g)) throw new Error('已取消');
+							const doc = await fetchDoc(url, '仅按歌名搜索');
+							collect(core.searchResults(doc, provider));
+							url = core.nextUtatenSearchPage(doc, url);
+						}
+					} else collect(candidates);
+					if (!sameTitle.size) throw new Error('未找到同名歌曲');
 					if (!evidence) evidence = track.lyrics || (deps.lyrics ? await deps.lyrics(id) : []);
 					if (!evidence.length) throw new Error('歌手写法不同，缺少本曲歌词用于核对');
-					announce('正在用歌词片段核对同名歌曲…');
-					const verified = [];
-					for (const candidate of candidates) {
-						if (!alive(g)) throw new Error('已取消');
-						const data = await detail(candidate);
-						if (core.lyricEvidence(evidence, data).accepted) verified.push(data);
+					let checked = 0;
+					async function verify(queue) {
+						let verified = null;
+						for (const [index, candidate] of queue.entries()) {
+							if (!alive(g)) throw new Error('已取消');
+							announce('正在用歌词片段核对同名歌曲（' + (index + 1) + '/' + queue.length + '）…');
+							const data = await detail(candidate);
+							if (!data) continue;
+							checked++;
+							if (!core.lyricEvidence(evidence, data).accepted) continue;
+							if (verified) throw new Error('多个版本的歌词均匹配，未自动套用');
+							verified = data;
+						}
+						return verified;
 					}
-					if (verified.length !== 1) throw new Error(verified.length ? '多个版本的歌词均匹配，未自动套用' : '同名歌曲的歌词片段不匹配');
-					return verified[0];
+					const queue = [...sameTitle.values()];
+					// A long search-result excerpt is stronger evidence than the title alone.
+					// If no preferred detail verifies, still check every other exact title.
+					const preferred = new Set(provider === 'utaten' ? core.matchingPreviews(evidence, queue) : []);
+					let verified = preferred.size ? await verify([...preferred]) : null;
+					if (!verified) verified = await verify(queue.filter(candidate => !preferred.has(candidate)));
+					if (verified) return verified;
+					if (!checked && unusableDetail) throw unusableDetail;
+					throw new Error('同名歌曲的歌词片段不匹配');
 				}
 				const data = await attempt(async () => {
 					if(manualUrl){
@@ -362,7 +412,13 @@
 					});
 				} catch (error) { cacheWarning = '（缓存写入失败：' + errorText(error) + '；本次仍可显示）'; }
 				accept(record, false, g, cacheWarning);
-			} catch (error) { if (alive(g)) { lastError = errorText(error); announce('获取失败：' + lastError + '\n' + (current && source !== 'local' ? '继续使用已有网站缓存' : '继续使用网易云音译 / 词典') + '；可手动重试或编辑'); } }
+			} catch (error) {
+				if (alive(g)) {
+					lastError = errorText(error);
+					manualSearch = searchTrack;
+					announce('获取失败：' + lastError + '\n' + (current && source !== 'local' ? '继续使用已有网站缓存' : '继续使用网易云音译 / 词典') + '；可手动重试或编辑');
+				}
+			}
 			finally { if (alive(g)) { loading = false; if (deps.onStatus) deps.onStatus(); } }
 		}
 		async function setSource(songId,metadata,settings,value){
@@ -376,10 +432,10 @@
 			if (!current || source === 'local') return null;
 			const next=originals();
 			if(next!==originalLines){originalLines=next;groups=core.prepare(current,originalLines);lineCache.clear();}
-			const k = mode + '|' + text;
+			const options=inlineOptions(text),k = mode + '|' + (options.reading||'') + '|' + text;
 			if (!lineCache.has(k)) {
 				if (lineCache.size > 1000) lineCache.clear();
-				lineCache.set(k, edits.annotate(current, text, core.segmentsFor(text, groups, mode, fromRomaji), mode));
+				lineCache.set(k, edits.annotate(current, text, core.segmentsFor(text, groups, mode, fromRomaji, options), mode));
 			}
 			return lineCache.get(k);
 		}
@@ -391,6 +447,7 @@
 			if (loading) throw new Error('正在获取网站注音，请等待完成，或主动停止获取后编辑');
 			if (current && currentId === songId && lastSettings && lastSettings.externalProvider === settings.externalProvider) return;
 			const previousError = currentId === songId ? lastError : '';
+			const previousSearch = currentId === songId ? manualSearch : null;
 			reset(); const g = generation; currentId = songId; lastSettings = { ...settings };
 			const dir = await directory(settings), path = dir + '/' + songId + '.json';
 			if (!/^\d{1,20}$/.test(songId)) throw new Error('无效歌曲 ID');
@@ -406,7 +463,7 @@
 				}
 				cachePath = dir; accept(record, true, g);
 				if (record.provider === 'local') {
-					lastError = previousError;
+					lastError = previousError; manualSearch = previousSearch;
 					announce((previousError ? '网站获取失败：' + previousError + '\n' : '') + '本地纠音记录尚无网站注音；可点“重新获取当前歌曲”获取，人工修改会保留');
 				}
 			});
@@ -419,7 +476,7 @@
 				const { raw, record } = await read(path, anchor.songId);
 				const local = anchor.provider === 'local';
 				const baseline = edits.annotate(local ? { ...record, provider: 'local', url: '' } : record, anchor.line,
-					local ? fallback(anchor.line) : core.segmentsFor(anchor.line, core.prepare(record,originals()), 'hiragana', fromRomaji), 'hiragana');
+					local ? fallback(anchor.line) : core.segmentsFor(anchor.line, core.prepare(record,originals()), 'hiragana', fromRomaji,inlineOptions(anchor.line)), 'hiragana');
 				const match = baseline && baseline.find(s => s.edit && edits.key(s.edit) === edits.key(anchor));
 				if (!match || match.edit.reading !== anchor.reading) throw new Error('本地读音已变化，请取消后重新打开编辑框');
 				const next = edits.update(record, anchor, value);
@@ -461,7 +518,7 @@
 				} else throw new Error('未知管理操作');
 			});
 		}
-		return { load, setSource, stop, cancelFetch, setAutoRetry, segments, fallbackSegments, ensureLocal, saveEdit, list, manage, directory, inspect: () => ({ requestId:generation, songId: currentId, status, error: lastError, warning, cachePath, source, loading, waitingRetry: !!cancelWait, url: source === 'local' ? '' : current && current.url, manualUrl:current&&current.manualSource&&current.manualSource.url||'', ready: !!current, title: current && current.title, artists: current && current.artists, edits: current ? edits.items(current).length : 0, settings: lastSettings }) };
+		return { load, setSource, stop, cancelFetch, setAutoRetry, segments, fallbackSegments, ensureLocal, saveEdit, list, manage, directory, inspect: () => ({ requestId:generation, songId: currentId, status, error: lastError, warning, cachePath, source, loading, manualSearch: loading ? null : manualSearch, waitingRetry: !!cancelWait, url: source === 'local' ? '' : current && current.url, manualUrl:current&&current.manualSource&&current.manualSource.url||'', ready: !!current, title: current && current.title, artists: current && current.artists, edits: current ? edits.items(current).length : 0, settings: lastSettings }) };
 	}
 	return { create, browserTransport, requestError };
 });

@@ -11,6 +11,14 @@
 		// 网易云页面自带的样式会把 <footer> 固定到窗口底部，按钮行因此用普通 div，并显式写死字体与定位
 		const style=doc.createElement('style');style.id='fg-source-dialog-style';
 		style.textContent='.fg-source-backdrop{position:fixed;z-index:2147483647;inset:0;display:grid;place-items:center;background:#0008}.fg-source-dialog{box-sizing:border-box;width:min(520px,92vw);padding:22px;border:1px solid #ffffff33;border-radius:12px;box-shadow:0 12px 36px #0005;background:#242a2f;color:var(--rnp-accent-color-shade-2,#eee);font:14px/1.6 "Microsoft YaHei","PingFang SC",sans-serif;text-align:left}.fg-source-dialog *{font-family:inherit}.fg-source-dialog h2{margin:0 0 14px;font-size:19px}.fg-source-dialog input{box-sizing:border-box;width:100%;margin:7px 0;padding:9px;color:inherit;background:#ffffff12;border:1px solid #ffffff33;border-radius:6px;font:inherit;user-select:text}.fg-source-dialog input:focus{outline:2px solid var(--rnp-accent-color,#8bd5ed)}.fg-source-dialog p{margin:5px 0 12px;opacity:.7}.fg-source-dialog [role=alert]{color:#ffb4ab;white-space:pre-wrap}.fg-source-dialog .fg-dialog-actions{position:static;display:flex;justify-content:flex-end;gap:9px;width:auto;height:auto;margin:15px 0 0;padding:0;background:none}.fg-source-dialog button{padding:7px 16px;background:#ffffff16;color:inherit;border:1px solid #ffffff33;border-radius:6px;font:inherit;cursor:pointer}.fg-source-dialog a{color:var(--rnp-accent-color,#8bd5ed);font:inherit}.fg-source-dialog[role=alertdialog] p{opacity:.85}';
+		style.textContent += `
+			.fg-search-fallback { display:grid; gap:6px; margin:6px 0 12px; }
+			.fg-search-fallback[hidden], .fg-search-fallback [role=status]:empty { display:none; }
+			.fg-search-field { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+			.fg-search-field input { min-width:85px; flex:1; width:100%; box-sizing:border-box; color:inherit; background:#8882; border:1px solid #8885; border-radius:4px; padding:4px; user-select:text; }
+			.fg-search-fallback button { padding:4px 8px; white-space:normal; }
+			.fg-search-fallback [role=status] { margin:0; font-size:.9em; opacity:.75; }
+		`;
 		doc.head.append(style);
 	}
 	function open(api,doc=document){
@@ -60,5 +68,48 @@
 		notices.set(doc,{cancel,promise});doc.body.append(backdrop);doc.addEventListener('keydown',escape,true);cancel.focus();
 		return promise;
 	}
-	return {open,confirmExternal};
+	function mountSearchFallback(box, getTrack, openUrl) {
+		const doc = box.ownerDocument;
+		ensureStyle(doc);
+		box.classList.add('fg-search-fallback');
+		box.hidden = true;
+		box.innerHTML = '<button type="button" data-open-search>手动在网页内搜索</button>' +
+			'<div class="fg-search-field"><input type="text" readonly aria-label="曲名" data-title><button type="button" data-copy-title>复制曲名</button></div>' +
+			'<div class="fg-search-field"><input type="text" readonly aria-label="首位歌手名" data-artist><button type="button" data-copy-artist>复制歌手名</button></div>' +
+			'<p role="status"></p>';
+		const title = box.querySelector('[data-title]'), artist = box.querySelector('[data-artist]');
+		const copyTitle = box.querySelector('[data-copy-title]'), copyArtist = box.querySelector('[data-copy-artist]');
+		const message = box.querySelector('[role=status]');
+		let shown = null;
+		box.querySelector('[data-open-search]').onclick = async () => {
+			const track = getTrack();
+			if (!track || track !== shown) return;
+			try { await openUrl('https://utaten.com/search'); }
+			catch (_) { if (getTrack() === track) message.textContent = '无法打开默认浏览器，请手动访问 UtaTen 搜索页。'; }
+		};
+		async function copy(field, key, label) {
+			const track = getTrack();
+			if (!track || track !== shown || !track[key]) return;
+			try {
+				await doc.defaultView.navigator.clipboard.writeText(track[key]);
+				if (getTrack() === track) message.textContent = '已复制' + label;
+				return;
+			} catch (_) { /* Older client webviews use the selected input instead. */ }
+			if (getTrack() !== track) return;
+			field.focus(); field.select();
+			let copied = false;
+			try { copied = doc.execCommand('copy'); } catch (_) {}
+			message.textContent = copied ? '已复制' + label : '已选中' + label + '，请按 Ctrl+C 复制';
+		}
+		copyTitle.onclick = () => copy(title, 'title', '曲名');
+		copyArtist.onclick = () => copy(artist, 'artist', '歌手名');
+		return () => {
+			const track = getTrack();
+			if (track === shown) return;
+			shown = track; box.hidden = !track; message.textContent = '';
+			title.value = track ? track.title : ''; artist.value = track ? track.artist : '';
+			copyTitle.disabled = !title.value; copyArtist.disabled = !artist.value;
+		};
+	}
+	return {open,confirmExternal,mountSearchFallback};
 });

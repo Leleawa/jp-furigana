@@ -105,6 +105,22 @@
 			return id ? String(id) : null;
 		}
 
+		/** 请求当前客户端播放，并确认歌曲切换完成。 */
+		async function playTrack(id) {
+			// Keep playback inside the current client; an OS orpheus:// link can
+			// start a second client and collide with BetterNCM's runtime directory.
+			const store=state.store || findReduxStore();
+			if(!looksLikeStore(store))throw new Error('当前客户端未提供应用内播放接口；请手动播放后进入编辑模式');
+			let playbackError;
+			const task=store.dispatch({type:'async:action/doAction',payload:{actionId:'play',eventType:'click',data:{
+				resource:{id},resourceType:'track',from:{scene:'orpheusMessage',needOpenVinylPage:true}
+			}}});
+			if(task && typeof task.catch==='function')task.catch(error=>{playbackError=error;});
+			const end=Date.now()+15000;
+			while(getCurrentTrackId()!==id&&!playbackError&&Date.now()<end)await new Promise(resolve=>setTimeout(resolve,150));
+			if(getCurrentTrackId()!==id)throw new Error('应用内播放未完成'+(playbackError?'：'+String(playbackError.message||playbackError):'；请检查歌曲是否可播放，或手动播放后进入编辑模式'));
+		}
+
 		/** 一次播放的标识：同一首歌重新播放时 playId 会变 */
 		function playKey(id = getCurrentTrackId()) {
 			const p = state.store && state.store.getState().playing;
@@ -194,7 +210,7 @@
 		}
 
 		/** 歌名和歌手：先读客户端状态，拿不到再查歌曲详情接口 */
-		async function trackMetadata(id) {
+		function localTrackMetadata(id) {
 			try {
 				const p = state.store && state.store.getState().playing;
 				for (const t of p ? [p.curTrack, p.playingTrack, p.track, p.resourceTrack] : []) {
@@ -203,6 +219,12 @@
 					if (artists.length) return { title: t.name, artists };
 				}
 			} catch (_) { /* Fall back to the official song detail endpoint. */ }
+			return null;
+		}
+
+		async function trackMetadata(id) {
+			const local = localTrackMetadata(id);
+			if (local) return local;
 			const url = DETAIL_API + encodeURIComponent(id) + '&ids=' + encodeURIComponent('[' + id + ']');
 			const data = await fetchJSON(url, '歌曲信息 ');
 			const t = (data.songs || []).find((song) => String(song.id) === id);
@@ -211,8 +233,8 @@
 		}
 
 		return {
-			getCurrentTrackId, playKey, clientTrackLines, currentTrackLanguage, requireJapaneseTrack,
-			ensureApiRomaji, lyricLines, trackMetadata,
+			getCurrentTrackId, playTrack, playKey, clientTrackLines, currentTrackLanguage, requireJapaneseTrack,
+			ensureApiRomaji, lyricLines, trackMetadata, localTrackMetadata,
 		};
 	}
 
