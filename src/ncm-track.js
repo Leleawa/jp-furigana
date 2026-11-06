@@ -210,7 +210,7 @@
 		}
 
 		/** 歌名和歌手：先读客户端状态，拿不到再查歌曲详情接口 */
-		async function trackMetadata(id) {
+		function localTrackMetadata(id) {
 			try {
 				const p = state.store && state.store.getState().playing;
 				for (const t of p ? [p.curTrack, p.playingTrack, p.track, p.resourceTrack] : []) {
@@ -219,6 +219,12 @@
 					if (artists.length) return { title: t.name, artists };
 				}
 			} catch (_) { /* Fall back to the official song detail endpoint. */ }
+			return null;
+		}
+
+		async function trackMetadata(id) {
+			const local = localTrackMetadata(id);
+			if (local) return local;
 			const url = DETAIL_API + encodeURIComponent(id) + '&ids=' + encodeURIComponent('[' + id + ']');
 			const data = await fetchJSON(url, '歌曲信息 ');
 			const t = (data.songs || []).find((song) => String(song.id) === id);
@@ -228,7 +234,7 @@
 
 		return {
 			getCurrentTrackId, playTrack, playKey, clientTrackLines, currentTrackLanguage, requireJapaneseTrack,
-			ensureApiRomaji, lyricLines, trackMetadata,
+			ensureApiRomaji, lyricLines, trackMetadata, localTrackMetadata,
 		};
 	}
 

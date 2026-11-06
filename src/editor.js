@@ -42,6 +42,10 @@
 			.fg-cache-row .fg-cache-info { flex:1; min-width:0; overflow-wrap:anywhere; }
 			.fg-cache-row small { display:block; opacity:.7; } .fg-cache-row button { flex-shrink:0; }
 			.fg-cache-details { white-space:pre-wrap; overflow-wrap:anywhere; } .fg-cache-details p { margin:10px 0; }
+			.fg-cache-reading-controls { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-top:16px; }
+			.fg-cache-details .fg-cache-lyric-line { line-height:1.85; margin:.3em 0; }
+			.fg-cache-lyric-line rt { font-size:.6em; }
+			.fg-cache-lyric-line small { display:block; opacity:.7; }
 		`;
 		doc.head.append(style);
 		const bar = doc.createElement('div'); bar.className = 'fg-edit-ui fg-edit-bar'; bar.hidden = true;
@@ -171,7 +175,48 @@
 				const b = doc.createElement('button'); b.type = 'button'; b.textContent = label;
 				b.onclick = async () => { b.disabled = true; error.textContent = ''; try { await run(); } catch (e) { error.textContent = e.message; } finally { b.disabled = false; } }; return b;
 			}
+			function renderLyrics(details, record, preview) {
+				const controls = doc.createElement('div'); controls.className = 'fg-cache-reading-controls';
+				const label = doc.createElement('strong');
+				const lyrics = doc.createElement('div'); lyrics.className = 'fg-cache-lyrics';
+				const originalLabel = record.provider === 'local' ? '本地原始注音' : '网站原文注音';
+				const toggle = doc.createElement('button'); toggle.type = 'button'; toggle.dataset.toggleReadings = '';
+				toggle.textContent = '显示修改后注音';
+				let corrected = false;
+				function appendRows(rows) {
+					for (const row of rows) {
+						const line = doc.createElement('p'); line.className = 'fg-cache-lyric-line';
+						for (const seg of row.segments) {
+							if (seg.hidden) continue;
+							if (!seg.rt) { line.append(doc.createTextNode(seg.text)); continue; }
+							const ruby = doc.createElement('ruby'), rt = doc.createElement('rt');
+							rt.textContent = seg.rt;
+							ruby.append(doc.createTextNode(seg.text), rt); line.append(ruby);
+						}
+						if (row.romaji) {
+							const small = doc.createElement('small'); small.textContent = row.romaji; line.append(small);
+						}
+						lyrics.append(line);
+					}
+				}
+				function show() {
+					label.textContent = corrected ? '修改后注音' : originalLabel;
+					toggle.setAttribute('aria-pressed', String(corrected));
+					lyrics.replaceChildren();
+					const rows = corrected ? preview.corrected : preview.original;
+					appendRows(rows);
+					if (!rows.length) lyrics.textContent = '这首歌没有可预览的缓存歌词或纠音记录。';
+					if (corrected && preview.separate.length) {
+						const note = doc.createElement('p');
+						note.textContent = '以下纠音按保存时的网易云原句显示，未套到网站原文的其他位置。';
+						lyrics.append(note); appendRows(preview.separate);
+					}
+				}
+				toggle.onclick = () => { corrected = !corrected; show(); };
+				controls.append(label, toggle); details.append(controls, lyrics); show();
+			}
 			function render() {
+				revision++;
 				list.replaceChildren();
 				const query = search.value.trim().toLowerCase();
 				const shown = rows.filter(r => (!box.querySelector('[data-modified]').checked || r.edits) && [r.title, ...r.artists, r.songId].join(' ').toLowerCase().includes(query));
@@ -182,19 +227,27 @@
 					const meta = doc.createElement('small'); meta.textContent = row.artists.join(' / ') + ' · ' + row.songId + ' · ' + (row.invalid ? '缓存损坏（请在目录内检查）' : bytes(row.bytes) + ' · 修改 ' + row.edits + ' 处'); info.append(meta); el.append(info);
 					if (!row.invalid) {
 						el.append(button('查看', async () => {
-							const record = await api.manage(row, 'read'); list.replaceChildren();
+							const token = ++revision;
+							const record = await api.manage(row, 'read');
+							if (manager !== backdrop || token !== revision) return;
+							const preview = await api.preview(record);
+							if (manager !== backdrop || token !== revision) return;
+							list.replaceChildren();
 							list.append(button('返回列表', render));
 							const details = doc.createElement('div'); details.className = 'fg-cache-details';
 							const title = doc.createElement('h3'); title.textContent = record.title; details.append(title);
-							for (const edit of (Array.isArray(record.userEdits) ? record.userEdits : [])) {
-								if (!edit || typeof edit.line !== 'string') continue;
+							const entries = Array.isArray(record.userEdits) ? record.userEdits.filter(edit => edit && typeof edit.line === 'string') : [];
+							if (entries.length) {
+								const heading = doc.createElement('h4'); heading.textContent = '人工纠音记录'; details.append(heading);
+							}
+							for (const edit of entries) {
 								const p = doc.createElement('p'); p.textContent = edit.line + '\n第 ' + (edit.start + 1) + ' 字起 · ' + edit.text + '：' + edit.original + ' → ' + edit.reading; details.append(p);
 							}
 							if (row.edits) {
 								const note = doc.createElement('p'); note.textContent = '原文、分词或来源变化后，不再匹配的修改仍保留在本文件中，但不会套用到其他位置。'; details.append(note);
 								details.append(button('恢复本曲全部原始读音', async () => { if (win.confirm('清除本曲全部人工修改，恢复原始读音？')) { await api.manage(row, 'restore'); await refresh(); } }));
 							}
-							const lyrics = doc.createElement('p'); lyrics.textContent = '网站原文（保留不变）\n' + record.lines.map(l => l.text).join('\n'); details.append(lyrics); list.append(details);
+							renderLyrics(details, record, preview); list.append(details);
 						}));
 						el.append(button('播放并编辑', async () => { await api.play(row); close(); }));
 						el.append(button('删除', async () => { if (win.confirm('删除「' + row.title + '」的本地歌词及 ' + row.edits + ' 处人工修改？此操作不可恢复。')) { await api.manage(row, 'delete'); await refresh(); } }));

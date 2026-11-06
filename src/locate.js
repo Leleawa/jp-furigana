@@ -62,7 +62,7 @@
 	}
 
 	function hasText(el) {
-		return plainText(el).trim().length > 0;
+		return !el.closest('.fg-edit-backdrop') && plainText(el).trim().length > 0;
 	}
 
 	function looksLyricish(el) {
@@ -103,7 +103,7 @@
 		 */
 		const visCache = new Map(); // 每轮 collectLines 清一次，别缓存过夜
 		function isVisible(el) {
-			if (!el || el.nodeType !== 1) return false;
+			if (!el || el.nodeType !== 1 || el.closest('.fg-edit-backdrop')) return false;
 			let s;
 			try {
 				s = getComputedStyle(el);
@@ -200,7 +200,7 @@
 		function collectLines() {
 			visCache.clear();
 			if (config.customSelector) {
-				const found = [...document.querySelectorAll(config.customSelector)];
+				const found = [...document.querySelectorAll(config.customSelector)].filter(el => !el.closest('.fg-edit-backdrop'));
 				if (found.length) {
 					state.matchedBy = 'custom';
 					return found;

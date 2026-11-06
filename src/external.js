@@ -154,6 +154,7 @@
 		let generation = 0, currentId = null, current = null, groups = [], status = '未启用外部网站';
 		let cachePath = '', source = '', lastSettings = null;
 		let cancelWait = null, loading = false, lastMetadata = null, lastError = '', warning = '';
+		let manualSearch = null;
 		const retryDelays = deps.retryDelays || [3000, 8000, 15000];
 		const lineCache = new Map();
 		let writes = Promise.resolve();
@@ -179,11 +180,11 @@
 		function announce(text) { status = text; if (deps.onStatus) deps.onStatus(); }
 		const alive = g => g === generation;
 		function cancelRetry() { if (cancelWait) cancelWait(); }
-		function reset() { generation++; cancelRetry(); loading = false; currentId = null; current = null; groups = []; originalLines = null; source = ''; lastError = ''; warning = ''; lineCache.clear(); }
+		function reset() { generation++; cancelRetry(); loading = false; currentId = null; current = null; groups = []; originalLines = null; source = ''; lastError = ''; warning = ''; manualSearch = null; lineCache.clear(); }
 		function stop() { reset(); announce('未启用外部网站'); }
 		function cancelFetch() {
 			if (!loading) return false;
-			generation++; cancelRetry(); loading = false; lastError = '';
+			generation++; cancelRetry(); loading = false; lastError = ''; manualSearch = null;
 			announce('已停止本轮网站获取，可进入编辑；下次播放或重新获取时仍会尝试网站');
 			return true;
 		}
@@ -213,7 +214,7 @@
 		const inlineOptions=text=>/[（(]/.test(text)?{reading:deps.reading&&deps.reading(text),proofSegments:deps.proofSegments&&deps.proofSegments(text)}:{};
 		function accept(record, cached, g, cacheWarning = '', preserveRequest = false) {
 			if (!alive(g)) return;
-			if (!preserveRequest) { lastError = ''; warning = cacheWarning; }
+			if (!preserveRequest) { lastError = ''; warning = cacheWarning; manualSearch = null; }
 			current = record; lineCache.clear();
 			const scope = lastSettings && lastSettings.externalProvider;
 			source = scope && scope !== 'auto' && record.provider !== scope ? 'local' : record.provider;
@@ -229,7 +230,7 @@
 			if (!/^\d{1,20}$/.test(currentId)) { lastError = '当前歌曲没有可用的网易云 ID'; announce(lastError); return; }
 			const id = currentId;
 			loading = true;
-			let retries = 0;
+			let retries = 0, searchTrack = null;
 			async function attempt(task, label) {
 				for (;;) {
 					if (!alive(g)) throw new Error('已取消');
@@ -284,6 +285,13 @@
 				const track = manualUrl?null:await attempt(metadata, '获取歌曲信息');
 				if (!alive(g)) return;
 				if (!manualUrl&&(!track || !track.title || !Array.isArray(track.artists) || !track.artists.some(Boolean))) throw new Error('无法确定歌名与歌手，请稍后重试');
+				// A pinned URL skips the metadata request. Reuse the active player's
+				// name and artist if that request eventually needs a manual fallback.
+				const searchMetadata = track || (manualUrl && deps.localMetadata && deps.localMetadata(id));
+				if (searchMetadata && searchMetadata.title) {
+					const firstArtist = searchMetadata.artists.find(name => typeof name === 'string' && name.trim());
+					searchTrack = { title: String(searchMetadata.title).trim(), artist: firstArtist ? firstArtist.trim() : '' };
+				}
 				const providers = settings.externalProvider === 'utaten' ? ['utaten'] : settings.externalProvider === 'utanet' ? ['utanet'] : ['utaten', 'utanet'];
 				const failures = new Map();
 				let evidence;
@@ -363,7 +371,13 @@
 					});
 				} catch (error) { cacheWarning = '（缓存写入失败：' + errorText(error) + '；本次仍可显示）'; }
 				accept(record, false, g, cacheWarning);
-			} catch (error) { if (alive(g)) { lastError = errorText(error); announce('获取失败：' + lastError + '\n' + (current && source !== 'local' ? '继续使用已有网站缓存' : '继续使用网易云音译 / 词典') + '；可手动重试或编辑'); } }
+			} catch (error) {
+				if (alive(g)) {
+					lastError = errorText(error);
+					manualSearch = searchTrack;
+					announce('获取失败：' + lastError + '\n' + (current && source !== 'local' ? '继续使用已有网站缓存' : '继续使用网易云音译 / 词典') + '；可手动重试或编辑');
+				}
+			}
 			finally { if (alive(g)) { loading = false; if (deps.onStatus) deps.onStatus(); } }
 		}
 		async function setSource(songId,metadata,settings,value){
@@ -392,6 +406,7 @@
 			if (loading) throw new Error('正在获取网站注音，请等待完成，或主动停止获取后编辑');
 			if (current && currentId === songId && lastSettings && lastSettings.externalProvider === settings.externalProvider) return;
 			const previousError = currentId === songId ? lastError : '';
+			const previousSearch = currentId === songId ? manualSearch : null;
 			reset(); const g = generation; currentId = songId; lastSettings = { ...settings };
 			const dir = await directory(settings), path = dir + '/' + songId + '.json';
 			if (!/^\d{1,20}$/.test(songId)) throw new Error('无效歌曲 ID');
@@ -407,7 +422,7 @@
 				}
 				cachePath = dir; accept(record, true, g);
 				if (record.provider === 'local') {
-					lastError = previousError;
+					lastError = previousError; manualSearch = previousSearch;
 					announce((previousError ? '网站获取失败：' + previousError + '\n' : '') + '本地纠音记录尚无网站注音；可点“重新获取当前歌曲”获取，人工修改会保留');
 				}
 			});
@@ -462,7 +477,7 @@
 				} else throw new Error('未知管理操作');
 			});
 		}
-		return { load, setSource, stop, cancelFetch, setAutoRetry, segments, fallbackSegments, ensureLocal, saveEdit, list, manage, directory, inspect: () => ({ requestId:generation, songId: currentId, status, error: lastError, warning, cachePath, source, loading, waitingRetry: !!cancelWait, url: source === 'local' ? '' : current && current.url, manualUrl:current&&current.manualSource&&current.manualSource.url||'', ready: !!current, title: current && current.title, artists: current && current.artists, edits: current ? edits.items(current).length : 0, settings: lastSettings }) };
+		return { load, setSource, stop, cancelFetch, setAutoRetry, segments, fallbackSegments, ensureLocal, saveEdit, list, manage, directory, inspect: () => ({ requestId:generation, songId: currentId, status, error: lastError, warning, cachePath, source, loading, manualSearch: loading ? null : manualSearch, waitingRetry: !!cancelWait, url: source === 'local' ? '' : current && current.url, manualUrl:current&&current.manualSource&&current.manualSource.url||'', ready: !!current, title: current && current.title, artists: current && current.artists, edits: current ? edits.items(current).length : 0, settings: lastSettings }) };
 	}
 	return { create, browserTransport, requestError };
 });

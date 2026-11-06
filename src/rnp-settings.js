@@ -39,12 +39,13 @@
 				'<div data-external>' + select('externalProvider', '外部网站范围', [['auto', '自动'], ['utaten', 'UtaTen'], ['utanet', 'Uta-Net']]) +
 				select('externalAutoRetry', '自动重新获取', [['off', '关闭'], ['failed', '失败后重试']]) +
 				'<div class="fg-rnp-actions"><button type="button" class="rnp-select-group-btn" data-action="retry">重新获取当前歌曲</button><button type="button" class="rnp-select-group-btn" data-action="source">查看来源网页</button><button type="button" class="rnp-select-group-btn" data-action="assign" title="支持手动指定 UtaTen 歌词页">手动指定歌词页</button></div>' +
-				'<p class="fg-rnp-note" role="status" data-status></p></div>' +
+				'<p class="fg-rnp-note" role="status" data-status></p><div data-search-fallback hidden></div></div>' +
 				'<div class="fg-rnp-actions"><button type="button" class="rnp-select-group-btn" data-action="edit">进入编辑模式</button><button type="button" class="rnp-select-group-btn" data-action="manage">本地歌词管理</button></div>' + slider('rtSize', '注音大小', 60) + slider('rtOpacity', '注音不透明度', 80) +
 				select('rtWeight', '注音字重', [['follow', '跟随歌词'], ['300', '细'], ['400', '常规'], ['500', '中等'], ['600', '粗'], ['700', '特粗']]) +
 				'<div class="fg-rnp-subtitle">兼容</div>' + checkbox('karaoke', '逐字歌词模式') + checkbox('onlyFirstLine', '只给原文注音') +
 				checkbox('skipCredits', '跳过制作信息行') + checkbox('skipNoKanaLines', '跳过没有假名的行') + '<p class="fg-rnp-note" role="alert" data-error></p>';
 			lyricTab.after(tab); lyricGroup.after(group);
+			const refreshSearchFallback = api.mountSearchFallback ? api.mountSearchFallback(group.querySelector('[data-search-fallback]')) : () => {};
 			const sliderDrafts = new Map();
 			function refresh() {
 				const config = api.config(), info = api.status();
@@ -68,6 +69,7 @@
 				group.querySelector('[data-external]').hidden = config.readingSource !== 'external';
 				const status = group.querySelector('[data-status]');
 				if (status.textContent !== info.text) status.textContent = info.text;
+				refreshSearchFallback();
 				group.querySelector('[data-action="retry"]').disabled = !info.canRetry;
 				group.querySelector('[data-action="source"]').disabled = !info.canOpen;
 				group.querySelector('[data-action="assign"]').disabled = !info.canAssign;

@@ -21,7 +21,7 @@
 		return;
 	}
 	// 改了实现就换一下，方便确认插件到底有没有被重新加载（JPFurigana.build）
-	const BUILD = '1.2.1-katakana-inline-fixes';
+	const BUILD = '1.2.1-cache-preview-search';
 	const REPO_URL = 'https://github.com/Leleawa/jp-furigana';
 	const CONFIG_KEY = 'jp-furigana.config';
 	// 注音算法改了就换 key，让旧缓存自然失效
@@ -304,27 +304,34 @@
 		return candidates[0];
 	}
 
-	async function loadTokenizer() {
-		if (state.tokenizer || state.loading) return;
+	let tokenizerPending = null;
+	function loadTokenizer() {
+		if (state.tokenizer) return Promise.resolve(state.tokenizer);
+		if (tokenizerPending) return tokenizerPending;
 		state.loading = true;
 		state.loadError = null;
-		installDictLoader();
-		const dicPath = await resolveDicPath();
-		console.log(LOG, '开始加载词典', dicPath);
-		const t0 = performance.now();
-		kuromoji.builder({ dicPath }).build((err, tokenizer) => {
-			state.loading = false;
-			if (err) {
-				state.loadError = err;
-				console.error(LOG, '词典加载失败', err);
-				notifyConfigUI(); // 让设置面板把错误显示出来
-				return;
-			}
+		tokenizerPending = (async () => {
+			installDictLoader();
+			const dicPath = await resolveDicPath();
+			console.log(LOG, '开始加载词典', dicPath);
+			const t0 = performance.now();
+			const tokenizer = await new Promise((resolve, reject) => {
+				kuromoji.builder({ dicPath }).build((error, result) => error ? reject(error) : resolve(result));
+			});
 			state.tokenizer = tokenizer;
-			console.log(LOG, `词典加载完成，耗时 ${Math.round(performance.now() - t0)}ms`);
+			console.log(LOG, '词典加载完成，耗时 ' + Math.round(performance.now() - t0) + 'ms');
 			schedule();
+			return tokenizer;
+		})().catch(error => {
+			state.loadError = error;
+			console.error(LOG, '词典加载失败', error);
+			return null;
+		}).finally(() => {
+			state.loading = false;
+			tokenizerPending = null;
 			notifyConfigUI();
 		});
+		return tokenizerPending;
 	}
 
 	// ------------------------------------------------------ 外部网站（按需联网）
@@ -345,6 +352,7 @@
 			externalClient = FuriganaExternal.create({
 				...FuriganaExternal.browserTransport(betterncm, plugin),
 				originalLines:currentOriginalLines,
+				localMetadata: track.localTrackMetadata,
 				reading:text=>{
 					const romaji=getRomaji(text);
 					return romaji&&FuriganaCore.romajiToKana(romaji);
@@ -953,16 +961,30 @@
 		if(!config.enabled||config.readingSource!=='external'||!getCurrentTrackId())throw new Error('请先播放歌曲并启用外部网站注音');
 		if(config.externalProvider==='utanet')throw new Error('手动指定 UtaTen 歌词页时，请将网站范围设为自动或 UtaTen');
 		const id=getCurrentTrackId();await requireJapaneseTrack(id);
+		if (!await ensureExternalConsent()) return;
 		const client=getExternalClient(),info=client.inspect();
 		const selected=await FuriganaSourceDialog.open({trackId:getCurrentTrackId,url:info.songId===id?(info.manualUrl||(info.source==='utaten'?info.url:'')):'',validate:FuriganaExternalCore.utatenURL});
 		if(!selected)return;
 		if(getCurrentTrackId()!==selected.songId||!config.enabled||config.readingSource!=='external')throw new Error('歌曲或读音来源已变化，请重新指定');
 		await requireJapaneseTrack(selected.songId);
+		if (!config.externalConsent || !config.enabled || config.readingSource !== 'external') throw new Error('读音来源已变化，请重新指定');
 		state.externalTrackId=selected.songId;state.externalForce=false;
 		state.externalPlayKey=externalPlayKey(selected.songId);
 		state.externalTask=client.setSource(selected.songId,()=>currentTrackMetadata(selected.songId),config,selected.url);
 		await state.externalTask;
 		invalidateAll();schedule(0);notifyConfigUI();
+	}
+	function manualSearchTrack() {
+		if (!config.enabled || config.readingSource !== 'external' || !externalClient) return null;
+		const info = externalClient.inspect(), id = getCurrentTrackId();
+		return info.songId === id && currentTrackLanguage().eligible === true ? info.manualSearch : null;
+	}
+	function mountSearchFallback(box) {
+		return FuriganaSourceDialog.mountSearchFallback(box, manualSearchTrack, url => betterncm.ncm.openUrl(url));
+	}
+	async function previewCachedReadings(record) {
+		if (record.provider === 'utanet') await loadTokenizer();
+		return FuriganaUserEdits.preview(record, config.kana, state.tokenizer ? getSegmentsFromRomaji : null);
 	}
 	function fallbackForEdit(text) {
 		const romaji = getRomaji(text);
@@ -994,7 +1016,7 @@
 		if (!await ensureExternalConsent()) return;
 		const ticket=++editEntry, client=getExternalClient();state.editInterrupt=null;
 		if (client.inspect().loading && state.externalTask) await state.externalTask;
-		if (getCurrentTrackId()!==id || ticket!==editEntry) return;
+		if (getCurrentTrackId()!==id || ticket!==editEntry || !config.externalConsent) return;
 		const attempted = state.externalTrackId===id && state.externalPlayKey===externalPlayKey(id);
 		editPreparing=true;
 		try {
@@ -1047,7 +1069,7 @@
 			openUrl: (url) => betterncm.ncm.openUrl(url),
 			subscribe: (fn) => { configRefreshers.add(fn); return () => configRefreshers.delete(fn); },
 			getCurrentTrackId, currentTrackLanguage, externalStatusText, editorButtonState,
-			setConfigValue, retryExternal, openExternalSource, chooseExternalSource,
+			setConfigValue, retryExternal, openExternalSource, chooseExternalSource, mountSearchFallback,
 			toggleEditor, revokeExternalConsent, rescan, probe, clearCache,
 		});
 	}
@@ -1082,6 +1104,7 @@
 			list: () => getExternalClient().list({ ...config }),
 			manage: (row, action) => getExternalClient().manage(row.songId, { ...config, externalCacheDir: row.path.slice(0, row.path.lastIndexOf('/')) }, action),
 			play: playCached,
+			preview: previewCachedReadings,
 		});
 		if (typeof FuriganaRnpSettings !== 'undefined') FuriganaRnpSettings.install({
 			config: () => config, set: setConfigValue,
@@ -1092,6 +1115,7 @@
 			subscribe: fn => { configRefreshers.add(fn); return () => configRefreshers.delete(fn); },
 			retry: retryExternal, openSource: openExternalSource,
 			assignSource:chooseExternalSource,
+			mountSearchFallback,
 			toggleEditor, openManager: () => editor && editor.openManager(),
 		});
 		window.JPFurigana = {

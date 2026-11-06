@@ -97,6 +97,7 @@
 				<div class="fg-hint">“仅查询”限制外部网站来源；加载期间及未匹配的行仍沿用网易云音译 / 词典。网站命中的行采用网站读音，保留原歌词和时间轴。网站注音也可能有错。</div>
 				<div class="fg-external-error" role="alert"></div>
 				<div class="fg-external-status" role="status" style="white-space:pre-wrap;font-size:12px;margin:8px 0"></div>
+				<div data-search-fallback hidden></div>
 				<div class="fg-row"><button data-a="externalRetry">重新获取当前歌曲</button><button data-a="externalSource">查看来源网页</button><button data-a="externalAssign" title="支持手动指定 UtaTen 歌词页">手动指定歌词页</button></div>
 			</section>
 			<div class="fg-row"><button data-a="editMode">进入编辑模式</button><button data-a="cacheManager">本地歌词管理</button></div>
@@ -132,6 +133,7 @@
 
 		const preview = root.querySelector('.fg-preview');
 		const status = root.querySelector('.fg-status');
+		const refreshSearchFallback = api.mountSearchFallback(root.querySelector('[data-search-fallback]'));
 		const errorBox = root.querySelector('.fg-external-error');
 
 		function refreshPreview() {
@@ -156,6 +158,7 @@
 			const eligible = api.currentTrackLanguage().eligible;
 			const externalStatus = root.querySelector('.fg-external-status'), text = api.externalStatusText();
 			if (externalStatus.textContent !== text) externalStatus.textContent = text;
+			refreshSearchFallback();
 			const japanese = eligible === true;
 			root.querySelector('[data-a="externalSource"]').disabled = !(japanese && info && info.url && info.songId === trackId);
 			root.querySelector('[data-a="externalRetry"]').disabled = !config.enabled || !trackId || eligible === false;

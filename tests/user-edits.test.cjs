@@ -55,5 +55,22 @@ const fallback = () => [{ text: '空', rt: 'そら' }, { text: 'をみる' }];
  client.stop(); await client.ensureLocal('1', metadata, { externalProvider: 'utanet' });
  assert.equal(client.inspect().source, 'local'); assert.equal(client.segments(line, 'hiragana'), null, 'Entering editing must not enable a cached website excluded by the selected scope');
  assert.equal(client.inspect().url, '');
+ const otherLine = '空を見た';
+ const sample = { ...record, userEdits: [
+  { ...a, reading: 'ウミ' },
+  { ...a, line: otherLine, reading: 'ホシ' },
+  { ...a, url: 'https://utaten.com/lyric/old/', reading: 'むかし' },
+ ] };
+ const beforePreview = JSON.stringify(sample), preview = edits.preview(sample, 'katakana');
+ assert.equal(preview.original[0].segments[0].rt, 'そら', 'The website original keeps its written script');
+ assert.deepEqual(preview.corrected[0].segments.filter(s => s.rt).map(s => s.rt), ['ウミ', 'そら']);
+ assert.equal(preview.separate.length, 1);
+ assert.equal(preview.separate[0].segments.map(s => s.text).join(''), otherLine);
+ assert.equal(preview.separate[0].segments[0].rt, 'ホシ', 'An edit on different client text stays at its saved position');
+ assert.equal(JSON.stringify(sample), beforePreview);
+ const localView = edits.preview({ provider: 'local', url: '', lines: [], userEdits: [{ ...a, provider: 'local', url: '', reading: 'なぞ' }] }, 'hiragana');
+ assert.equal(localView.original[0].segments[0].rt, 'そら');
+ assert.equal(localView.corrected[0].segments[0].rt, 'なぞ');
+ assert.equal(localView.separate.length, 0);
  console.log('User edits passed: unchanged source JSON, exact positions, concurrent/stale writes, restore, refresh, local-only/unknown readings, listing, deletion and orphan safety.');
 })().catch(e => { console.error(e); process.exitCode = 1; });
