@@ -32,20 +32,38 @@
 	}
 	const key = s => indexed(String(s || ''), VARIANTS).key;
 	function titleKey(s) {
-		return key(queryTitle(s));
+		// Punctuation and word boundaries can be part of the official title.
+		return queryTitle(s).toLowerCase().replace(/\s+/g, ' ');
+	}
+	function stripTitleNote(title) {
+		const close = title[title.length - 1];
+		const open = { ')': '(', ']': '[', '】': '【' }[close];
+		if (!open) return title;
+		let depth = 1;
+		for (let i = title.length - 2; i > 0; i--) {
+			if (title[i] === close) depth++;
+			if (title[i] !== open || --depth !== 0) continue;
+			const note = title.slice(i + 1, -1).trim();
+			const work = /^(?:TV\s*)?(?:アニメ|テレビ|映画|ドラマ|劇場版|ゲーム|舞台|ミュージカル)/i.test(note) ||
+				/(?:主題歌|テーマ(?:曲|ソング)|挿入歌|劇中歌|オープニング|エンディング|タイアップ)/.test(note) ||
+				/(?:^|[^a-z0-9])(?:OP|ED)(?:\s*(?:曲|テーマ))?$/i.test(note);
+			const version = /\b(?:feat(?:uring)?|ft|cover|remix|remaster(?:ed)?)\b|翻唱|カバー|リミックス|(?:^|\s)(?:live|acoustic)(?:\s+ver(?:sion)?\.?)?$/i.test(note);
+			return work || version ? title.slice(0, i).trimEnd() : title;
+		}
+		return title;
 	}
 	function queryTitle(s) {
 		let title=String(s||'').normalize('NFKC').trim();
 		for(let i=0;i<4;i++){
 			const before=title;
-			let next=title.replace(/(?:\s*\([^()]*\))+\s*$/,'').replace(/\s*[【\[][^【】\[\]]*(?:feat\.?|ft\.?|cover|remix|翻唱|カバー|リミックス)[^【】\[\]]*[】\]]\s*$/i,'');
+			let next=stripTitleNote(title);
 			next=next.replace(/(?:\s+|\s*[-–—|]\s*)(?:feat(?:uring)?\.?|ft\.?)(?![a-z]).*$/i,'');
 			next=next.replace(/\s+[-–—|]\s+[^\n]*(?:\bcover\b|\bremix\b|\bremaster(?:ed)?\b|翻唱|カバー|リミックス)[^\n]*$/i,'');
 			next=next.replace(/(?:\s+|\s*[-–—|]\s*)(?:cover(?:ed)?|remix(?:ed)?|remaster(?:ed)?)(?![a-z])(?=\s*(?:$|by\b|\d|ver(?:sion)?\b|edition\b|[:–—-])).*$/i,'');
 			next=next.replace(/(?:\s+|\s*[-–—|]\s*)(?:翻唱(?:版)?|カバー|リミックス).*$/i,'').trim();
 			if(next)title=next;if(title===before)break;
 		}
-		return title.replace(/[.…]+\s*$/, '').replace(/./gu,c=>VARIANTS[c]||c).trim();
+		return title.replace(/./gu,c=>VARIANTS[c]||c).trim();
 	}
 	function utatenURL(value){
 		try{const input=String(value||'').trim();if(input.length>2048)throw new Error('URL too long');const u=new URL(input);
@@ -74,17 +92,46 @@
 	}
 	function searchResults(doc, provider) {
 		const output = [];
+		const seen = new Set();
 		const selector = provider === 'utaten' ? '.searchResult__title a[href]' : 'a[href^="/song/"]';
 		for (const a of doc.querySelectorAll(selector)) {
 			const row = a.closest('tr');
 			if (!row) continue;
 			const artistNodes = row.querySelectorAll(provider === 'utaten' ? '.searchResult__artist > p a' : 'a[href^="/artist/"]');
 			const title = (a.querySelector('.songlist-title') || a).textContent.trim();
-			const url = new URL(a.getAttribute('href'), provider === 'utaten' ? 'https://utaten.com/' : 'https://www.uta-net.com/').href;
-			if (!allowedURL(url) || !title || output.some(x => x.url === url)) continue;
-			output.push({ title, artists: [...artistNodes].map(n => n.textContent.trim()), url });
+			let url;
+			try {
+				url = new URL(a.getAttribute('href'), provider === 'utaten' ? 'https://utaten.com/' : 'https://www.uta-net.com/').href;
+				if (provider === 'utaten') url = utatenURL(url);
+			} catch (_) { continue; }
+			if (!allowedURL(url) || !title || seen.has(url)) continue;
+			seen.add(url);
+			const candidate = { title, artists: [...artistNodes].map(n => n.textContent.trim()), url };
+			if (provider === 'utaten') candidate.preview = row.querySelector('.lyricList__beginning a')?.textContent.trim() || '';
+			output.push(candidate);
 		}
 		return output;
+	}
+	function nextUtatenSearchPage(doc, currentURL) {
+		const href = doc.querySelector('link[rel~="next"][href]')?.getAttribute('href');
+		if (!href) return null;
+		try {
+			const current = new URL(currentURL);
+			const next = new URL(href, current);
+			if (!allowedURL(next.href) || !['utaten.com', 'www.utaten.com'].includes(next.hostname)) return null;
+			let params;
+			if (next.pathname.startsWith('/search/=/')) {
+				params = new URLSearchParams(next.pathname.slice('/search/=/'.length).replace(/\//g, '&'));
+			} else if (next.pathname === '/search' || next.pathname === '/search/') {
+				params = next.searchParams;
+			} else return null;
+			const page = Number(current.searchParams.get('page') || 1) + 1;
+			if (!Number.isSafeInteger(page) || Number(params.get('page')) !== page ||
+				!params.get('title') || titleKey(params.get('title')) !== titleKey(current.searchParams.get('title')) || params.get('artist_name')) return null;
+			// Only use the site's next-page number, preserving the original query.
+			current.searchParams.set('page', String(page));
+			return current.href;
+		} catch (_) { return null; }
 	}
 	function textLines(el) {
 		if (!el) return [];
@@ -141,7 +188,10 @@
 		const artists = [...doc.querySelectorAll('h1 .artist-name')].map(n => n.textContent.trim());
 		const heading = doc.querySelector('h1 > span:first-child');
 		const title = heading ? heading.textContent.trim() : '';
-		if (!title || !artists.length || titleKey(title) !== titleKey(candidate.title)) throw new Error('歌ネット歌曲信息无法核对');
+		// The global lyrics page appends the romanized title in parentheses.
+		const withoutRomaji = title.normalize('NFKC').replace(/\s*\([\p{Script=Latin}\d\s.'’!?&,\-]+\)\s*$/u, '');
+		const expected = titleKey(candidate.title);
+		if (!title || !artists.length || (titleKey(title) !== expected && titleKey(withoutRomaji) !== expected)) throw new Error('歌ネット歌曲信息无法核对');
 		return { provider: 'utanet', url, title: candidate.title, artists, lines: jp.map((text, i) => ({ text, romaji: roma[i] })) };
 	}
 	function validRecord(record, id) {
@@ -406,13 +456,22 @@
 		return normalize(resolveSegments(target,groups,mode,fromRomaji));
 	}
 
+	function lyricKeys(lines) {
+		return (lines || []).filter(s => typeof s === 'string' && !/作詞|作曲|編曲|作词|作曲|编曲|lyrics|composer|arrang/i.test(s)).map(s => indexed(s).key);
+	}
+	function matchingPreviews(lines, candidates) {
+		const lyrics = lyricKeys(lines).join('');
+		return candidates.filter(({ preview }) => {
+			const snippet = preview ? indexed(preview).key : '';
+			return snippet.length >= 24 && lyrics.includes(snippet);
+		});
+	}
 	function lyricEvidence(lines, record) {
-		const normalize = s => indexed(s).key;
-		const targets = [...new Set((lines || []).filter(s => typeof s === 'string' && !/作詞|作曲|編曲|作词|作曲|编曲|lyrics|composer|arrang/i.test(s)).map(normalize))].filter(s => s.length >= 8 && /[ぁ-ゖァ-ヶ一-龯]/.test(s));
+		const targets = [...new Set(lyricKeys(lines))].filter(s => s.length >= 8 && /[ぁ-ゖァ-ヶ一-龯]/.test(s));
 		const sources = prepare(record).map(g => g.key);
 		const found = targets.filter(t => sources.some(s => s === t || t.length >= 12 && s.includes(t)));
 		const characters = found.reduce((n, s) => n + s.length, 0);
 		return { hits: found.length, characters, accepted: found.length >= 2 && characters >= 24 && found.length / Math.min(8, targets.length) >= .25 };
 	}
-	return { key, titleKey, queryTitle, matches, allowedURL, utatenURL, searchURL, searchResults, parseUtaten, parseUtanet, validRecord, prepare, segmentsFor, kana, writtenKana, lyricEvidence };
+	return { key, titleKey, queryTitle, matches, allowedURL, utatenURL, searchURL, searchResults, nextUtatenSearchPage, parseUtaten, parseUtanet, validRecord, prepare, segmentsFor, kana, writtenKana, matchingPreviews, lyricEvidence };
 });

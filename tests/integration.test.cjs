@@ -270,6 +270,11 @@ const assertScreenshot = (mode = 'hiragana') => {
 		assert(!box.hidden); assert.equal(box.querySelector('[data-title]').value,'星の手紙');
 		assert.equal(box.querySelector('[data-artist]').value,'試験歌手');
 	}
+	assert.deepEqual([...searchBoxes[0].querySelectorAll('button')].map(button => button.textContent), ['手动在网页内搜索','复制曲名','复制歌手名']);
+	const rnpSearchButtons = [...searchBoxes[1].querySelectorAll('button')];
+	assert(rnpSearchButtons.every(button => button.classList.contains('rnp-select-group-btn')));
+	assert.deepEqual(rnpSearchButtons.map(button => button.textContent), ['手动在网页内搜索','复制','复制']);
+	assert.deepEqual(rnpSearchButtons.slice(1).map(button => button.getAttribute('aria-label')), ['复制曲名','复制歌手名']);
 	await searchBoxes[0].querySelector('[data-copy-title]').onclick();
 	await searchBoxes[1].querySelector('[data-copy-artist]').onclick();
 	const beforeBrowser = requests;

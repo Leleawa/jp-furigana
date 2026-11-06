@@ -301,13 +301,24 @@
 						catch (error) { const contextual = new Error(stage + '：' + errorText(error)); contextual.retryable = retryable(error); contextual.retryAfterMs = error.retryAfterMs; throw contextual; }
 					};
 					let candidates = [], searched = false;
+					const expectedTitle = core.titleKey(track.title);
 					const fetched = new Map();
+					let unusableDetail = null;
 					async function detail(candidate) {
 						if (fetched.has(candidate.url)) return fetched.get(candidate.url);
 						const url = provider === 'utaten' ? candidate.url : candidate.url.replace('/song/', '/global/en/lyric/');
 						const doc = await fetchDoc(url, '歌词页面');
-						const data = provider === 'utaten' ? core.parseUtaten(doc, url) : core.parseUtanet(doc, url, candidate);
-						if (core.titleKey(data.title) !== core.titleKey(track.title)) throw new Error('歌曲页歌名与搜索结果不一致');
+						let data;
+						try {
+							data = provider === 'utaten' ? core.parseUtaten(doc, url) : core.parseUtanet(doc, url, candidate);
+							if (core.titleKey(data.title) !== expectedTitle) throw new Error('歌曲页歌名与搜索结果不一致');
+							if (!core.validRecord({ schema: 1, songId: id, ...data }, id)) throw new Error('网站歌词格式校验失败');
+						} catch (error) {
+							// A different title or a page without usable lyrics does
+							// not disqualify the other candidates in this search.
+							unusableDetail = error;
+							data = null;
+						}
 						fetched.set(candidate.url, data); return data;
 					}
 					const artists = [...new Set(track.artists.filter(a => typeof a === 'string' && a.trim()).map(a=>a.trim()))];
@@ -316,24 +327,54 @@
 						const selected={...track,artists:[artist]};
 						if(provider==='utaten'||!searched){announce('正在按歌手搜索 · '+artist+'…');candidates=core.searchResults(await fetchDoc(core.searchURL(provider,selected),'搜索页面'),provider);searched=true;}
 						const exact=candidates.filter(c=>core.matches(c,selected));
-						if(exact.length===1){const data=await detail(exact[0]);if(core.matches(data,selected))return data;}
+						if(exact.length===1){const data=await detail(exact[0]);if(data&&core.matches(data,selected))return data;}
 					}
 					// Relax the artist only after strict matching fails; this remains one attempt.
-					if (provider === 'utaten') candidates = core.searchResults(await fetchDoc(core.searchURL(provider, track, true), '仅按歌名搜索'), provider);
-					candidates = candidates.filter(c => core.titleKey(c.title) === core.titleKey(track.title));
-					if (!candidates.length) throw new Error('未找到同名歌曲');
-					if (candidates.length > 5) throw new Error('同名候选超过 5 个，未自动套用');
+					const sameTitle = new Map();
+					const collect = rows => {
+						for (const candidate of rows) {
+							if (core.titleKey(candidate.title) !== expectedTitle) continue;
+							const previous = sameTitle.get(candidate.url);
+							if (!previous || (candidate.preview && !previous.preview)) sameTitle.set(candidate.url, candidate);
+						}
+					};
+					if (provider === 'utaten') {
+						announce('正在按曲名搜索 UtaTen…');
+						let url = core.searchURL(provider, track, true);
+						while (url) {
+							if (!alive(g)) throw new Error('已取消');
+							const doc = await fetchDoc(url, '仅按歌名搜索');
+							collect(core.searchResults(doc, provider));
+							url = core.nextUtatenSearchPage(doc, url);
+						}
+					} else collect(candidates);
+					if (!sameTitle.size) throw new Error('未找到同名歌曲');
 					if (!evidence) evidence = track.lyrics || (deps.lyrics ? await deps.lyrics(id) : []);
 					if (!evidence.length) throw new Error('歌手写法不同，缺少本曲歌词用于核对');
-					announce('正在用歌词片段核对同名歌曲…');
-					const verified = [];
-					for (const candidate of candidates) {
-						if (!alive(g)) throw new Error('已取消');
-						const data = await detail(candidate);
-						if (core.lyricEvidence(evidence, data).accepted) verified.push(data);
+					let checked = 0;
+					async function verify(queue) {
+						let verified = null;
+						for (const [index, candidate] of queue.entries()) {
+							if (!alive(g)) throw new Error('已取消');
+							announce('正在用歌词片段核对同名歌曲（' + (index + 1) + '/' + queue.length + '）…');
+							const data = await detail(candidate);
+							if (!data) continue;
+							checked++;
+							if (!core.lyricEvidence(evidence, data).accepted) continue;
+							if (verified) throw new Error('多个版本的歌词均匹配，未自动套用');
+							verified = data;
+						}
+						return verified;
 					}
-					if (verified.length !== 1) throw new Error(verified.length ? '多个版本的歌词均匹配，未自动套用' : '同名歌曲的歌词片段不匹配');
-					return verified[0];
+					const queue = [...sameTitle.values()];
+					// A long search-result excerpt is stronger evidence than the title alone.
+					// If no preferred detail verifies, still check every other exact title.
+					const preferred = new Set(provider === 'utaten' ? core.matchingPreviews(evidence, queue) : []);
+					let verified = preferred.size ? await verify([...preferred]) : null;
+					if (!verified) verified = await verify(queue.filter(candidate => !preferred.has(candidate)));
+					if (verified) return verified;
+					if (!checked && unusableDetail) throw unusableDetail;
+					throw new Error('同名歌曲的歌词片段不匹配');
 				}
 				const data = await attempt(async () => {
 					if(manualUrl){
